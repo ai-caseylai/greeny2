@@ -4,6 +4,149 @@ ESP32-WROOM-32E → Cloudflare Worker → Durable Object (WebSocket Hibernation)
 
 No MQTT. No EMQX. One protocol (WSS + JSON), one API surface, every consumer — browser, CLI script, future AI agent — speaks the same language.
 
+## Reproduction from scratch
+
+A step-by-step guide an AI agent or human can follow to reproduce this entire project on new hardware and a new Cloudflare account.
+
+### Prerequisites
+
+- ESP32-WROOM-32E (or any ESP32 dev board — 16MB flash, CH340 or CP2102 USB bridge)
+- Arduino CLI 1.5+ with ESP32 board package 3.3+
+- Node.js 22+ (for native WebSocket, toggle script)
+- Python 3.10+ with matplotlib + numpy (for graphing)
+- Git
+- Cloudflare account with Workers Free plan + a domain (or workers.dev subdomain)
+
+### Cloudflare API token scopes
+
+Create at `dash.cloudflare.com` → API Tokens → Create Custom Token:
+
+| Permission | Level |
+|---|---|
+| Account — Workers Scripts | Edit |
+| Account — D1 | Edit |
+| Account — Workers KV Storage | Edit |
+| Account — Account Analytics | Read |
+| Account — Account Settings | Read |
+| Zone — Workers Routes | Edit |
+| Zone — DNS | Edit |
+
+(Workers Scripts — Edit also covers Durable Objects. No separate DO permission exists.)
+
+### Arduino libraries
+
+```bash
+arduino-cli lib install WebSockets@2.7.2    # Links2004/arduinoWebSockets
+arduino-cli lib install ArduinoJson@7.4.3   # bblanchon/ArduinoJson
+```
+
+### Wire protocol (WSS + JSON)
+
+Every consumer — ESP32, browser, CLI script, AI agent — sends and receives the same JSON messages over WSS.
+
+**ESP32 → DO:**
+```json
+{"type":"ping","seq":1}
+{"type":"ack","command":"set_led","status":"ok","led":true,"esp32_ms":452381}
+```
+
+**DO → ESP32:**
+```json
+{"type":"pong","seq":1,"echo":"[DO] received ping seq=1"}
+{"command":"set_led","params":{"state":true}}
+{"type":"sync","led":false,"doTs":1782826120386}
+```
+
+**Browser/CLI → DO:**
+```json
+{"command":"set_led","state":true,"ts":1719000000000}
+```
+
+**DO → all browsers/CLI (broadcast):**
+```json
+{"type":"state","led":true,"connected":true,"doTs":1719000000450}
+```
+
+### 1. Deploy the Worker + DO
+
+```bash
+# Install wrangler + esbuild
+cd iot-hub
+npm install
+
+# Bundle TypeScript → JavaScript
+npx esbuild src/index.ts --bundle --format=esm \
+  --outfile=src/index.mjs --external:cloudflare:workers
+
+# Option A: wrangler deploy (if wrangler works on your machine)
+set CLOUDFLARE_API_TOKEN=<your-token>
+set WRANGLER_HOME=%CD%\.wrangler     # Windows workaround for junction permission
+wrangler deploy
+
+# Option B: Cloudflare API multipart upload (if wrangler has permission issues)
+curl -X PUT \
+  "https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/workers/scripts/iot-hub" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -F 'metadata={"main_module":"index.mjs","compatibility_date":"2025-12-01","compatibility_flags":["nodejs_compat"],"bindings":[{"name":"DEVICE_HUB","type":"durable_object_namespace","class_name":"DeviceHub"}],"migrations":{"tag":"v1","new_sqlite_classes":["DeviceHub"]}};type=application/json' \
+  -F 'index.mjs=@src/index.mjs;type=application/javascript+module'
+```
+
+### 2. Bind a route to your domain
+
+```bash
+# A-record (proxied) so the domain resolves through Cloudflare
+curl -X POST "https://api.cloudflare.com/client/v4/zones/<ZONE_ID>/dns_records" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -d '{"type":"A","name":"your-domain.com","content":"192.0.2.1","ttl":1,"proxied":true}'
+
+# Worker route — catch all traffic
+curl -X POST "https://api.cloudflare.com/client/v4/zones/<ZONE_ID>/workers/routes" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -d '{"pattern":"your-domain.com/*","script":"iot-hub"}'
+```
+
+Or enable the workers.dev subdomain:
+```bash
+curl -X POST "https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/workers/scripts/iot-hub/subdomain" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -d '{"enabled":true}'
+```
+
+The Worker then serves at `iot-hub.<subdomain>.workers.dev`.
+
+### 3. Flash the ESP32
+
+Edit `WIFI_SSID`, `WIFI_PASS`, and `WS_HOST` in `esp32-sketch/esp32-sketch.ino`, then:
+
+```bash
+arduino-cli compile --fqbn esp32:esp32:esp32 esp32-sketch
+arduino-cli upload  --fqbn esp32:esp32:esp32 -p COM3 esp32-sketch
+arduino-cli monitor -p COM3 -c baudrate=115200
+```
+
+The ESP32 boots → connects Wi-Fi → syncs NTP → opens WSS to the DO → sends ping every 10s.
+
+### 4. Verify
+
+```bash
+# Health check
+curl https://your-domain.com/health
+# → {"status":"ok"}
+
+# Dashboard
+open https://your-domain.com/
+# → LED control page, shows "Connected" if ESP32 is online
+```
+
+### 5. Run overnight toggle test
+
+```bash
+node iot-hub/toggle-led.mjs
+# Ctrl+C to stop
+node iot-hub/toggle-led.mjs --stats
+python iot-hub/graph-results.py   # saves chart to Desktop
+```
+
 ## Architecture
 
 ```
