@@ -12,8 +12,8 @@
 #include <ArduinoJson.h>
 
 // ── CONFIG ──────────────────────────────────────
-const char* WIFI_SSID     = "CMHK-ECch";
-const char* WIFI_PASS     = "gt5cqu69";
+const char* WIFI_SSID     = "YOUR_SSID";      // ← change before flashing
+const char* WIFI_PASS     = "YOUR_PASSWORD";  // ← change before flashing
 
 const char* WS_HOST       = "iot-hub.funconnect.workers.dev";
 const uint16_t WS_PORT    = 443;
