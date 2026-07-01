@@ -1,4 +1,4 @@
-# IoT Hub — Edge-Native Digital Twin Prototype
+# IoT Hub — Edge-Native Agent Pipeline Prototype
 
 ESP32-WROOM-32E → Cloudflare Worker → Durable Object (WebSocket Hibernation) → Dashboard + AI Agent API.
 
@@ -191,7 +191,7 @@ One ESP32 at 1 ping/10s + occasional commands = ~2% of free tier per day.
 
 ## Operating philosophy
 
-1. **DO is the digital twin.** The canonical state lives in the Durable Object, not the device.
+1. **DO is the canonical state.** The real state lives in the Durable Object, not the device. Every consumer reads from the DO, never from the device directly.
 2. **WSS + JSON is the universal protocol.** Every consumer speaks it. No adapters.
 3. **Hibernation is non-negotiable.** `ctx.acceptWebSocket()`, zero-I/O constructor, no pending promises.
 4. **The Cloudflare API is the agent's control plane.** Workers, DO, D1, DNS, routes, analytics — one token.
