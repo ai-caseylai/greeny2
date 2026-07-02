@@ -15,6 +15,10 @@ export class DeviceHub extends DurableObject {
   private esp32ws: WebSocket | null = null;
   private browsers = new Map<WebSocket, Attachment>();
   private ledState = false;
+  private tds = 0;
+  private ec = 0;
+  private ph = 7.0;
+  private temp = 25.0;
 
   constructor(ctx: DurableObjectState, env: unknown) {
     super(ctx, env);
@@ -108,6 +112,33 @@ export class DeviceHub extends DurableObject {
         doTs: ackTs,
       });
     }
+    // Telemetry from sensor hub
+    else if (msg.type === "telemetry") {
+      this.tds = msg.tds as number;
+      this.ec = msg.ec as number;
+      this.ph = msg.ph as number;
+      this.temp = msg.temp as number;
+      this.ledState = msg.led as boolean;
+      const ackTs = Date.now();
+
+      // Store latest in SQLite
+      this.ctx.storage.put("tds", msg.tds as number);
+      this.ctx.storage.put("ec", msg.ec as number);
+      this.ctx.storage.put("ph", msg.ph as number);
+      this.ctx.storage.put("temp", msg.temp as number);
+
+      // Broadcast sensor state to all browsers
+      this.broadcast({
+        type: "state",
+        led: this.ledState,
+        connected: true,
+        tds: this.tds,
+        ec: this.ec,
+        ph: this.ph,
+        temp: this.temp,
+        doTs: ackTs,
+      });
+    }
     // Also handle ping (existing behaviour — DO echoes back)
     else if (msg.type === "ping") {
       ws.send(
@@ -121,7 +152,12 @@ export class DeviceHub extends DurableObject {
   }
 
   private handleBrowserMessage(msg: Record<string, unknown>) {
-    if (msg.command === "set_led" && this.esp32ws) {
+    // Forward calibration commands to ESP32
+    if (msg.command === "calibrate" && this.esp32ws) {
+      console.log(`[DO] browser command: calibrate ${msg.params?.type}`);
+      this.esp32ws.send(JSON.stringify(msg));
+    }
+    else if (msg.command === "set_led" && this.esp32ws) {
       const state = msg.state as boolean;
       const clientTs = msg.ts as number;
       const doTs = Date.now();

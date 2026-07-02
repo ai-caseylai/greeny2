@@ -69,6 +69,15 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   }
   .log .line { padding: 2px 0; border-bottom: 1px solid #1e293b; }
   .log .line:last-child { border-bottom: none; }
+  .sensors {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    margin: 20px 0; padding: 16px; background: #0f172a;
+    border-radius: 10px;
+  }
+  .sensor { text-align: center; }
+  .sensor-label { font-size: 0.72rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .sensor-value { font-size: 1.5rem; font-weight: 700; color: #e2e8f0; }
+  .sensor-unit  { font-size: 0.75rem; color: #64748b; }
 </style>
 </head>
 <body>
@@ -95,11 +104,34 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     Last RTT: <span id="rttVal">—</span>
   </div>
 
+  <div class="sensors">
+    <div class="sensor">
+      <div class="sensor-label">TDS</div>
+      <div class="sensor-value" id="tdsVal">—</div>
+      <div class="sensor-unit">ppm</div>
+    </div>
+    <div class="sensor">
+      <div class="sensor-label">EC</div>
+      <div class="sensor-value" id="ecVal">—</div>
+      <div class="sensor-unit">μS/cm</div>
+    </div>
+    <div class="sensor">
+      <div class="sensor-label">pH</div>
+      <div class="sensor-value" id="phVal">—</div>
+      <div class="sensor-unit">pH</div>
+    </div>
+    <div class="sensor">
+      <div class="sensor-label">Temp</div>
+      <div class="sensor-value" id="tempVal">—</div>
+      <div class="sensor-unit">°C</div>
+    </div>
+  </div>
+
   <div class="log" id="logBox"></div>
 </div>
 
 <script>
-const DEVICE = "esp32-01";
+const DEVICE = "esp32-sensor";
 const WS_URL = (location.protocol === "https:" ? "wss://" : "ws://")
               + location.host + "/dashboard/" + DEVICE;
 
@@ -146,11 +178,15 @@ function connect() {
     if (msg.type === "state") {
       setConnected(msg.connected);
       setLED(msg.led);
+      if (msg.tds  !== undefined) $("tdsVal").textContent = msg.tds;
+      if (msg.ec   !== undefined) $("ecVal").textContent = msg.ec;
+      if (msg.ph   !== undefined) $("phVal").textContent = msg.ph;
+      if (msg.temp !== undefined) $("tempVal").textContent = msg.temp;
       const ts = Date.now();
       if (msg.doTs) {
         $("rttVal").textContent = (ts - msg.doTs) + "ms";
       }
-      log("State: LED=" + (msg.led ? "ON" : "OFF") + " conn=" + msg.connected);
+      log("State: LED=" + (msg.led ? "ON" : "OFF") + " EC=" + msg.ec + " pH=" + msg.ph);
     }
   };
 

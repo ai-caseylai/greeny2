@@ -4,6 +4,10 @@ var DeviceHub = class extends DurableObject {
   esp32ws = null;
   browsers = /* @__PURE__ */ new Map();
   ledState = false;
+  tds = 0;
+  ec = 0;
+  ph = 7;
+  temp = 25;
   constructor(ctx, env) {
     super(ctx, env);
     ctx.getWebSockets().forEach((ws) => {
@@ -76,6 +80,27 @@ var DeviceHub = class extends DurableObject {
         connected: true,
         doTs: ackTs
       });
+    } else if (msg.type === "telemetry") {
+      this.tds = msg.tds;
+      this.ec = msg.ec;
+      this.ph = msg.ph;
+      this.temp = msg.temp;
+      this.ledState = msg.led;
+      const ackTs = Date.now();
+      this.ctx.storage.put("tds", msg.tds);
+      this.ctx.storage.put("ec", msg.ec);
+      this.ctx.storage.put("ph", msg.ph);
+      this.ctx.storage.put("temp", msg.temp);
+      this.broadcast({
+        type: "state",
+        led: this.ledState,
+        connected: true,
+        tds: this.tds,
+        ec: this.ec,
+        ph: this.ph,
+        temp: this.temp,
+        doTs: ackTs
+      });
     } else if (msg.type === "ping") {
       ws.send(
         JSON.stringify({
@@ -87,7 +112,10 @@ var DeviceHub = class extends DurableObject {
     }
   }
   handleBrowserMessage(msg) {
-    if (msg.command === "set_led" && this.esp32ws) {
+    if (msg.command === "calibrate" && this.esp32ws) {
+      console.log(`[DO] browser command: calibrate ${msg.params?.type}`);
+      this.esp32ws.send(JSON.stringify(msg));
+    } else if (msg.command === "set_led" && this.esp32ws) {
       const state = msg.state;
       const clientTs = msg.ts;
       const doTs = Date.now();
@@ -210,6 +238,15 @@ var DASHBOARD_HTML = `<!DOCTYPE html>
   }
   .log .line { padding: 2px 0; border-bottom: 1px solid #1e293b; }
   .log .line:last-child { border-bottom: none; }
+  .sensors {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    margin: 20px 0; padding: 16px; background: #0f172a;
+    border-radius: 10px;
+  }
+  .sensor { text-align: center; }
+  .sensor-label { font-size: 0.72rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .sensor-value { font-size: 1.5rem; font-weight: 700; color: #e2e8f0; }
+  .sensor-unit  { font-size: 0.75rem; color: #64748b; }
 </style>
 </head>
 <body>
@@ -236,11 +273,34 @@ var DASHBOARD_HTML = `<!DOCTYPE html>
     Last RTT: <span id="rttVal">\u2014</span>
   </div>
 
+  <div class="sensors">
+    <div class="sensor">
+      <div class="sensor-label">TDS</div>
+      <div class="sensor-value" id="tdsVal">\u2014</div>
+      <div class="sensor-unit">ppm</div>
+    </div>
+    <div class="sensor">
+      <div class="sensor-label">EC</div>
+      <div class="sensor-value" id="ecVal">\u2014</div>
+      <div class="sensor-unit">\u03BCS/cm</div>
+    </div>
+    <div class="sensor">
+      <div class="sensor-label">pH</div>
+      <div class="sensor-value" id="phVal">\u2014</div>
+      <div class="sensor-unit">pH</div>
+    </div>
+    <div class="sensor">
+      <div class="sensor-label">Temp</div>
+      <div class="sensor-value" id="tempVal">\u2014</div>
+      <div class="sensor-unit">\xB0C</div>
+    </div>
+  </div>
+
   <div class="log" id="logBox"></div>
 </div>
 
 <script>
-const DEVICE = "esp32-01";
+const DEVICE = "esp32-sensor";
 const WS_URL = (location.protocol === "https:" ? "wss://" : "ws://")
               + location.host + "/dashboard/" + DEVICE;
 
@@ -287,11 +347,15 @@ function connect() {
     if (msg.type === "state") {
       setConnected(msg.connected);
       setLED(msg.led);
+      if (msg.tds  !== undefined) $("tdsVal").textContent = msg.tds;
+      if (msg.ec   !== undefined) $("ecVal").textContent = msg.ec;
+      if (msg.ph   !== undefined) $("phVal").textContent = msg.ph;
+      if (msg.temp !== undefined) $("tempVal").textContent = msg.temp;
       const ts = Date.now();
       if (msg.doTs) {
         $("rttVal").textContent = (ts - msg.doTs) + "ms";
       }
-      log("State: LED=" + (msg.led ? "ON" : "OFF") + " conn=" + msg.connected);
+      log("State: LED=" + (msg.led ? "ON" : "OFF") + " EC=" + msg.ec + " pH=" + msg.ph);
     }
   };
 
