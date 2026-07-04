@@ -1,8 +1,15 @@
 # Greeny Alpha — IoT + Cloudflare Edge Pipeline
 
-ESP32-WROOM-32E → Cloudflare Worker → Durable Object (WebSocket Hibernation + SQLite) → D1 → Dashboard + REST API + AI Agent.
+**Live demo:** [greeie-spa.funconnect.workers.dev](https://greeie-spa.funconnect.workers.dev) (React SPA) · [iot-hub.funconnect.workers.dev](https://iot-hub.funconnect.workers.dev) (Worker + API)  
+**AI agent:** `POST /api/chat` — asks "how are the plants?" and gets a real answer from live sensor data  
+**Desktop agent:** Abu skill at `greeny-alpha/SKILL.md` — same API surface, same data
 
-No MQTT. No EMQX. One protocol (WSS + JSON), one API surface. Three consumers (browser dashboard, Cloudflare AI agent, Abu Desktop) speak the same language. Agent-decomposed architecture — Firmware, Edge, Dashboard, and AI are separate modules each maintainable by a dedicated AI agent with bounded context.
+ESP32-WROOM-32E → Cloudflare Worker → Durable Object (WebSocket Hibernation + SQLite) → D1 → Dashboard + REST API + AI Agent. No MQTT. No EMQX. One protocol (WSS + JSON). Three consumers (browser, AI agent, Abu Desktop) speak the same language.
+
+**Sensors live right now:** pH 7–8 (two-point calibrated), EC ~200 µS/cm / TDS ~100 ppm (calibrated against reference meter), Temp 21°C (DS18B20). 17,000+ telemetry rows in D1. Calibration survives replugs — EEPROM protected from corruption on boot.
+
+**Postmortems:** [Project-wide lessons](README.md) · [Firmware](firmware/POSTMORTEM.md) · [AI Agent](edge/AI-POSTMORTEM.md)  
+**Architecture docs:** [System design](ARCHITECTURE.md) · [Wire protocol](PROTOCOL.md) · [Edge spec](edge/EDGE.md) · [Firmware spec](firmware/FIRMWARE.md) · [Dashboard spec](edge/DASHBOARD.md)
 
 ---
 
