@@ -1,341 +1,249 @@
-# IoT Hub — Edge-Native Agent Pipeline Prototype
+# Greeny Alpha — IoT + Cloudflare Edge Pipeline
 
-ESP32-WROOM-32E → Cloudflare Worker → Durable Object (WebSocket Hibernation) → Dashboard + AI Agent API.
+ESP32-WROOM-32E → Cloudflare Worker → Durable Object (WebSocket Hibernation + SQLite) → D1 → Dashboard + REST API + AI Agent.
 
-No MQTT. No EMQX. One protocol (WSS + JSON), one API surface, every consumer — browser, CLI script, future AI agent — speaks the same language.
+No MQTT. No EMQX. One protocol (WSS + JSON), one API surface. Three consumers (browser dashboard, Cloudflare AI agent, Abu Desktop) speak the same language. Agent-decomposed architecture — Firmware, Edge, Dashboard, and AI are separate modules each maintainable by a dedicated AI agent with bounded context.
 
-## Reproduction from scratch
-
-A step-by-step guide an AI agent or human can follow to reproduce this entire project on new hardware and a new Cloudflare account.
-
-### Prerequisites
-
-- ESP32-WROOM-32E (or any ESP32 dev board — 16MB flash, CH340 or CP2102 USB bridge)
-- Arduino CLI 1.5+ with ESP32 board package 3.3+
-- Node.js 22+ (for native WebSocket, toggle script)
-- Python 3.10+ with matplotlib + numpy (for graphing)
-- Git
-- Cloudflare account with Workers Free plan + a domain (or workers.dev subdomain)
-
-### Cloudflare API token scopes
-
-Create at `dash.cloudflare.com` → API Tokens → Create Custom Token:
-
-| Permission | Level |
-|---|---|
-| Account — Workers Scripts | Edit |
-| Account — D1 | Edit |
-| Account — Workers KV Storage | Edit |
-| Account — Account Analytics | Read |
-| Account — Account Settings | Read |
-| Zone — Workers Routes | Edit |
-| Zone — DNS | Edit |
-
-(Workers Scripts — Edit also covers Durable Objects. No separate DO permission exists.)
-
-### Arduino libraries
-
-```bash
-arduino-cli lib install WebSockets@2.7.2    # Links2004/arduinoWebSockets
-arduino-cli lib install ArduinoJson@7.4.3   # bblanchon/ArduinoJson
-```
-
-### Wire protocol (WSS + JSON)
-
-Every consumer — ESP32, browser, CLI script, AI agent — sends and receives the same JSON messages over WSS.
-
-**ESP32 → DO:**
-```json
-{"type":"ping","seq":1}
-{"type":"ack","command":"set_led","status":"ok","led":true,"esp32_ms":452381}
-```
-
-**DO → ESP32:**
-```json
-{"type":"pong","seq":1,"echo":"[DO] received ping seq=1"}
-{"command":"set_led","params":{"state":true}}
-{"type":"sync","led":false,"doTs":1782826120386}
-```
-
-**Browser/CLI → DO:**
-```json
-{"command":"set_led","state":true,"ts":1719000000000}
-```
-
-**DO → all browsers/CLI (broadcast):**
-```json
-{"type":"state","led":true,"connected":true,"doTs":1719000000450}
-```
-
-### 1. Deploy the Worker + DO
-
-```bash
-# Install wrangler + esbuild
-cd iot-hub
-npm install
-
-# Bundle TypeScript → JavaScript
-npx esbuild src/index.ts --bundle --format=esm \
-  --outfile=src/index.mjs --external:cloudflare:workers
-
-# Option A: wrangler deploy (if wrangler works on your machine)
-set CLOUDFLARE_API_TOKEN=<your-token>
-set WRANGLER_HOME=%CD%\.wrangler     # Windows workaround for junction permission
-wrangler deploy
-
-# Option B: Cloudflare API multipart upload (if wrangler has permission issues)
-curl -X PUT \
-  "https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/workers/scripts/iot-hub" \
-  -H "Authorization: Bearer <TOKEN>" \
-  -F 'metadata={"main_module":"index.mjs","compatibility_date":"2025-12-01","compatibility_flags":["nodejs_compat"],"bindings":[{"name":"DEVICE_HUB","type":"durable_object_namespace","class_name":"DeviceHub"}],"migrations":{"tag":"v1","new_sqlite_classes":["DeviceHub"]}};type=application/json' \
-  -F 'index.mjs=@src/index.mjs;type=application/javascript+module'
-```
-
-### 2. Bind a route to your domain
-
-```bash
-# A-record (proxied) so the domain resolves through Cloudflare
-curl -X POST "https://api.cloudflare.com/client/v4/zones/<ZONE_ID>/dns_records" \
-  -H "Authorization: Bearer <TOKEN>" \
-  -d '{"type":"A","name":"your-domain.com","content":"192.0.2.1","ttl":1,"proxied":true}'
-
-# Worker route — catch all traffic
-curl -X POST "https://api.cloudflare.com/client/v4/zones/<ZONE_ID>/workers/routes" \
-  -H "Authorization: Bearer <TOKEN>" \
-  -d '{"pattern":"your-domain.com/*","script":"iot-hub"}'
-```
-
-Or enable the workers.dev subdomain:
-```bash
-curl -X POST "https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/workers/scripts/iot-hub/subdomain" \
-  -H "Authorization: Bearer <TOKEN>" \
-  -d '{"enabled":true}'
-```
-
-The Worker then serves at `iot-hub.<subdomain>.workers.dev`.
-
-### 3. Flash the ESP32
-
-Edit `WIFI_SSID`, `WIFI_PASS`, and `WS_HOST` in `esp32-sketch/esp32-sketch.ino`, then:
-
-```bash
-arduino-cli compile --fqbn esp32:esp32:esp32 esp32-sketch
-arduino-cli upload  --fqbn esp32:esp32:esp32 -p COM3 esp32-sketch
-arduino-cli monitor -p COM3 -c baudrate=115200
-```
-
-The ESP32 boots → connects Wi-Fi → syncs NTP → opens WSS to the DO → sends ping every 10s.
-
-### 4. Verify
-
-```bash
-# Health check
-curl https://your-domain.com/health
-# → {"status":"ok"}
-
-# Dashboard
-open https://your-domain.com/
-# → LED control page, shows "Connected" if ESP32 is online
-```
-
-### 5. Run overnight toggle test
-
-```bash
-node iot-hub/toggle-led.mjs
-# Ctrl+C to stop
-node iot-hub/toggle-led.mjs --stats
-python iot-hub/graph-results.py   # saves chart to Desktop
-```
+---
 
 ## Architecture
 
 ```
-ESP32 ──WSS──▶ Worker ──▶ Durable Object (per-device, hibernation)
-  │                │              │
-  │ ping/pong      │ route by     │ ledState, connected
-  │ LED control    │ device ID    │ SQLite storage
-  │ telemetry      │ dashboard    │ broadcast to all consumers
-                   │              │
-Browser ──WSS──▶   │              │
-CLI script ──WSS─▶ │              │
-AI agent ──WSS──▶  │              │
+ESP32 (#2 Sensor Hub) ──WSS──▶ Cloudflare Worker (iot-hub)
+  │  pH (GPIO 39), TDS (GPIO 35), Temp (GPIO 13), LED (GPIO 2)
+  │
+  ├── DeviceHub DO (per-device, hibernation, SQLite-backed)
+  │   ├── Hot path: ctx.storage.sql.exec() — synchronous, µs latency
+  │   │   ├── telemetry_buffer (INSERT on each message)
+  │   │   ├── relay_queue (SELECT/DELETE for commands)
+  │   │   ├── alert_buffer (INSERT on threshold breach)
+  │   │   └── device_state (key-value for LED, calibration state)
+  │   │
+  │   ├── Alarm (every 60s): batch flush DO-local SQLite → D1
+  │   └── Broadcast: {type:"state"} to all dashboard WebSockets
+  │
+  ├── GreenyAgent DO (Agents SDK + Workers AI)
+  │   ├── Reads ctx.storage.sql on same thread (zero quota)
+  │   ├── 5 tools: query_telemetry, check_alerts, toggle_led, get_history, calibrate
+  │   └── POST /api/chat → streaming response
+  │
+  ├── D1 (greeny-db) — cold path, historical queries
+  │   ├── telemetry (17,000+ rows and growing)
+  │   ├── alerts (3,300+ rows)
+  │   ├── devices (registry + status)
+  │   ├── relay_log (audit trail)
+  │   ├── users (auth)
+  │   └── settings (key-value config)
+  │
+  ├── REST API (JWT-auth via HS256 Web Crypto)
+  │   ├── POST /api/auth/login
+  │   ├── GET /api/telemetry, /api/devices, /api/alerts
+  │   ├── POST /api/relay (LED toggle, Casey protocol compat)
+  │   └── POST /api/chat (AI agent)
+  │
+  └── Dashboard (two surfaces)
+      ├── greeie-spa.funconnect.workers.dev — React SPA (forked from Casey's GREENY)
+      └── iot-hub.funconnect.workers.dev — inline HTML (legacy)
 ```
 
-### Why no MQTT / EMQX
+**Two-tier storage — the central idea:**
 
-MQTT is a protocol for moving bytes between machines. For a system where an AI agent is the first-class consumer, you don't need a message broker — you need a programmable, queryable state machine at the edge. The Durable Object is that state machine.
+| Tier | Where | Latency | Blocks hibernation? | Queryable by REST? |
+|---|---|---|---|---|
+| Hot path | DO-local SQLite (`ctx.storage.sql`) | Microseconds (same thread) | No — synchronous, no `await` | No (private to DO) |
+| Cold path | D1 (`env.DB`) | 10–50ms (network) | Yes — `await` prevents hibernation | Yes |
 
-- **Single protocol**: WSS + JSON. Every device, every dashboard, every script, every agent.
-- **Single API surface**: The DO's HTTP endpoint + WSS pub/sub. One token, one domain.
-- **Agent-native**: The AI agent queries the DO for state, sends commands through the DO, and monitors via `wrangler tail` — all through the same Cloudflare API token.
+The DO hibernates between telemetry messages. `webSocketMessage()` contains zero `await` calls — all storage is synchronous `ctx.storage.sql.exec()`. D1 is only touched in the alarm handler. This is the architectural insight that makes the pipeline viable at scale: Casey's GREENY calls D1 on every telemetry (4-6 round trips per message), blocking hibernation and burning quota. Our DO hibernates ~9.9 seconds out of every 10-second cycle. Verified: overnight benchmark (687 toggles, 0 failures, P50=577ms RTT).
 
-## Key design decisions
+---
 
-### WebSocket Hibernation — zero idle cost
+## Hardware
 
-The DO uses `ctx.acceptWebSocket()` (not `server.accept()`). Between messages, the DO hibernates — zero CPU billing. A WebSocket connection stays alive at Cloudflare's edge with no JavaScript running. When the ESP32 sends a message, the DO wakes, processes (~5ms), and hibernates again.
+### ESP32 #2 — Sensor Hub (Deployed)
+- **Chip:** ESP32-D0WD-V3 rev v3.1, MAC `b0:cb:d8:c2:35:90`, 4MB flash
+- **USB:** CH340 on COM3, 115200 baud
+- **Sketch:** `firmware/esp32/esp32.ino` — unified (was two separate sketches, consolidated)
+- **Pins:** LED=GPIO 2, DS18B20=GPIO 13, TDS=GPIO 35, pH=GPIO 39, OLED=GPIO 21/22
+- **WiFi:** MyWiFi / my-password (2.4GHz)
 
-**Overnight test (13 hours, 687 toggles):** ~700 requests billed, ~85 seconds duration. < 2% of free tier.
+### ESP32 #1 — LED Controller (Not connected)
+- **Chip:** ESP32-D0WD-V3 rev v3.0, MAC `c0:49:ef:b4:79:6c`, 16MB flash
+- **Sketch:** Available at `firmware/esp32-led/`
 
-### Constructor must be zero-I/O
+---
 
-The DO constructor runs on every wake (hibernation and cold start). Ours does only `deserializeAttachment()` — pure CPU, no storage reads, no network calls. This keeps cold starts under 500ms even after hours of idle.
+## Sensor Calibration
 
-### SerializeAttachment for per-connection state
+### EC/TDS — Inverted Board (Off-Brand)
 
-Class fields (`this.ledState`) are lost on every hibernation wake. Only `ws.serializeAttachment()` and `ctx.storage` (SQLite) survive. Attachments are limited to 16 KB — use for device ID, role, timestamps. Use SQLite for durable state (LED state, telemetry history).
+**The problem:** Our replacement TDS board outputs voltage that DROPS with conductivity, opposite of the DFRobot SEN0244 spec (voltage RISES). The standard cubic formula produced negative readings in tap water and near-zero readings in distilled.
 
-### Every deploy disconnects all WebSockets
+**What failed (6 attempts):**
+1. CAL:EC:0 commands were silently dropped — QoS 0 for calibrate, ESP32 reconnecting after each flash
+2. `loadCalibration()` validation range was ±1000 — our board needs ecOffset ~2275. Every boot reset it to 0
+3. `EEPROM.get()` overwrites the variable BEFORE validation — hardcoded defaults were clobbered
+4. CAL:EC:VALUE formula divides by `ecRawCubic` (the cubic polynomial), which is near-zero for inverted boards in tap water — kValue exploded to huge values, producing EC=-36,000
+5. kValue validation minimum was 0.1 — our computed 0.094 was rejected and reset to 1.0
+6. Repeated calibrate commands during reconnect windows corrupted EEPROM with partial two-point state
 
-`wrangler deploy` restarts the DO, disconnecting all clients. The ESP32 sketch uses the library's `setReconnectInterval(5000)` for automatic recovery. The dashboard and CLI script reconnect on `onclose`.
+**What worked:** The saved-pattern for loadCalibration (save value before EEPROM read, restore if invalid), extended validation ranges (ecOffset up to 5000, kValue down to 0.001), flipped formula `(ecOffset - ecRaw)` for inverted output, and hardcoded calibration pair (kValue=0.088, ecOffset=201) forced in setup() with EEPROM write. The board needed 5V to drive analog output — 3V3 was insufficient.
 
-## Problems encountered and solved
+**Lessons learned:**
+- Off-brand sensor boards can invert the voltage-conductivity relationship. Verify with a multimeter.
+- `EEPROM.get()` is destructive — it overwrites the variable before you can validate
+- Calibration commands MUST be idempotent and replay-safe, or use QoS 0 (no queue)
+- The cubic polynomial breaks down for inverted boards at low voltages — a linear approximation may be better
+- Never calibrate against an unknown reference (bottled water ≠ distilled)
 
-### 1. ESP32 TLS handshake fails silently
+### pH — Two-Point Calibration
 
-**Symptom:** `[WS-Client] connect wss...` then nothing. No error message.
+**Working:** pH 4.00 and 9.18 buffers used for two-point calibration. Slope and offset stored in EEPROM (addresses 24, 28, 32). Single-point also supported via CAL:PH:4, CAL:PH:7, CAL:PH:9. Slope validated to 0.010–0.300 V/pH.
 
-**Root cause:** ESP32 has no battery-backed RTC. After power-on, the clock reads January 1, 1970. TLS certificate validation fails because every cert appears expired.
+**Issues:** The old pH amplifier board powered on (green LED) but analog output was dead — 0V on the signal pin regardless of probe position. Replacement board fixed it. pH probes need 30-60 minutes of soaking after dry storage to rehydrate the glass bulb and reference junction.
 
-**Solution:** Call `configTime()` with NTP servers, block until `time(nullptr) > 8*3600*2` (16 hours past epoch). Only then attempt WSS.
+### Temperature (DS18B20)
+Waterproof probe on GPIO 13. OneWire + DallasTemperature library. ±0.5°C factory accuracy. Working flawlessly throughout.
 
-### 2. Certificate bundle: which CA does Cloudflare use?
+---
 
-**Symptom:** `certificate verify failed` even after NTP sync.
+## Command Forwarding — The Hibernation Bug
 
-**Root cause:** `beginSSL()` uses a single fingerprint. `beginSslWithCA()` needs a PEM cert file. Neither works for Cloudflare's multi-CA edge (Let's Encrypt, Google Trust Services, DigiCert).
+**The bug:** Every Cloudflare Worker deploy restarts all DO instances, dropping WebSocket connections. The ESP32 reconnects within 5 seconds, but there's a window where `this.esp32ws` is null. During this window, the old code silently dropped dashboard commands:
 
-**Solution:** `beginSslWithBundle(host, port, path, NULL, 0, "")` with `NULL, 0` — uses ESP32's built-in 77 KB CA bundle. All Cloudflare edge CAs are included. No PEM embedding needed.
+```
+dashboard → DO → "ESP32 not connected? Discard." → command lost forever
+```
 
-### 3. wrangler filesystem permission error on Windows
+**The fix:** Commands are always queued in `relay_queue` (DO-local SQLite). `drainRelayQueue` runs on every telemetry and ping — it finds queued commands and forwards them when the ESP32 reconnects. This is Casey's relay queue pattern from GREENY, moved from D1 to DO-local SQLite for zero latency.
 
-**Symptom:** `A permission error occurred while accessing the file system. Affected path: C:\Users\...\Application Data`
+**Additional fix:** On ESP32 reconnect, the relay queue is purged for that device. Calibration commands are context-dependent (probe position matters) — replaying a CAL:PH:4 command after a reboot when the probe is now in pH 9.18 buffer corrupts the calibration. Calibrate commands are QoS 0 (direct forward, never queued). Set_led commands are QoS 1 (queued, replayed safely).
 
-**Root cause:** Legacy Windows junction `Application Data` has `Everyone:(DENY)(RD)`.
+---
 
-**Solution A:** `icacls "C:\Users\<user>\Application Data" /grant Everyone:R` (needs admin).  
-**Solution B:** `WRANGLER_HOME=%CD%\.wrangler` — keeps wrangler in the project directory.  
-**Solution C:** Deploy via Cloudflare API multipart upload (used for this project).
+## Alert Deduplication
 
-### 4. DO class not recognized after deploy
+Without deduplication, a persistent condition (pH=34.95 from disconnected probe) generates one alert per telemetry message — 43 identical alerts in 7 minutes, flooding D1.
 
-**Symptom:** `Cannot apply new-class migration to class 'DeviceHub' that is not exported by script.`
+**Fix:** Before inserting into `alert_buffer`, check if an unflushed alert of same type+device already exists. If so, skip. Reduces alert rate from 1 per 10s telemetry to 1 per 60s alarm flush — still fires while condition persists, but at 1/6 the rate.
 
-**Root cause:** esbuild tree-shakes unused exports. The Worker imports `DeviceHub` but doesn't re-export it. Cloudflare requires DO classes to be exported from the main module.
+---
 
-**Solution:** Add `export { DeviceHub }` to the Worker's `index.ts`.
+## Quota Safety
 
-### 5. Serial monitor blocks COM port for other tools
+| Resource | Used (typical day) | Free limit | % |
+|---|---|---|---|
+| DO Requests | ~1,800 | 100,000/day | 1.8% |
+| DO Duration | ~550s (70 GB-s) | 13,000 GB-s/day | 0.5% |
+| D1 Rows Read | Varies with history queries | 5M/day | <5% |
+| D1 Rows Written | ~1,500/day (alarm flush) | 100,000/day | 1.5% |
+| D1 Storage | ~2 MB | 5 GB | <0.1% |
+| Workers AI | ~50 neurons/interaction | 10,000/day | <5% |
 
-**Symptom:** `Port monitor error: command 'open' failed: Serial port busy`
+**The rows-read crisis:** An earlier version caused D1 rows-read to spike toward 90% of quota. Root cause: the `devices.last_seen` query in the alarm handler scanned ALL rows in `telemetry_buffer WHERE flushed=1` — a table that grew unbounded. Without cleanup, a week of data would produce 60K rows × 1,440 alarm cycles = 86M rows read/day. **Fix:** DELETE old flushed rows after each alarm cycle, keeping only the last 100 for the `last_seen` query.
 
-**Root cause:** `arduino-cli monitor` holds the COM port exclusively. Only one reader at a time.
+---
 
-**Solution:** Kill the monitor job before uploading or running another monitor. ESP32 WSS communication uses Wi-Fi, not the COM port — serial is debug-only.
+## AI Agent — Architectural Insight
 
-### 6. RTT measurement inflation
+The agent lives INSIDE the DO, not beside it. It reads `ctx.storage.sql` on the same thread — microsecond latency, zero quota, zero network hops. It only calls Workers AI when a user sends a message. Watching is free.
 
-**Symptom:** Script logs RTT = 1200-1400ms but actual click-to-LED is 500-600ms.
+**System prompt philosophy:** The agent doesn't just report numbers. It knows failure signatures — pH=-10 means probe disconnected, not acid spill. EC rising 2%/°C is physics, not a problem. Warm tone, plant-focused language, translates sensor data into care instructions.
 
-**Root cause:** RTT measures DO timestamp → script receipt (one leg). The DO's single-threaded event loop and `ctx.storage.put()` microtask scheduling add latency between the ESP32 ack and the broadcast. This is DO scheduling overhead, not network latency.
+**Calibration state machine:** Tracks multi-step physical workflows in `ctx.storage.sql`. Walk user through 2-point pH calibration: "put probe in pH 7.0 buffer, say ready" → records → "rinse, put in pH 4.0, say ready" → computes slope and offset → grades probe health. Same pattern unlocks nutrient dosing, reservoir flushes, sensor maintenance.
 
-**Real measurement:** `digitalWrite()` → ack = 2ms on ESP32. Full round-trip: ~500ms from browser click to LED change (human-verified and serial-confirmed).
+**Abu Desktop integration:** Skill file at `C:\Users\sacl2\AppData\Local\Abu\builtin-skills\greeny-alpha\SKILL.md`. Six tools mapped to REST endpoints: check plants, get history, view alerts, LED on/off, device status, health check. Uses hardcoded JWT for auth.
 
-## File structure
+---
+
+## Key Design Decisions
+
+1. **Per-device DO scope.** Casey uses per-office DO (one DO for all devices in an office). We use per-device (`idFromName("esp32-sensor")`). This isolates failures — one noisy device can't block others. For single-user deployment, this is correct. For multi-tenant, Casey's per-office scope is more efficient.
+
+2. **Inline HTML → React SPA.** The original prototype used a 400-line inline HTML string inside the Worker — zero build step, single deploy. The React SPA (forked from Casey's GREENY) replaced it for the demo. The inline dashboard still exists as fallback. The REST API supports both.
+
+3. **Bundled Worker over Pages Functions.** Casey splits WebSocket (Worker) from REST API (Pages Functions). We consolidated into one Worker — simpler deployment, fewer moving parts. Appropriate for single-user scale.
+
+4. **Casey protocol compat layer.** The backend accepts both our native message format (`{command:"set_led", state:true}`) and Casey's (`{type:"relay", relay1:1}`). The DO broadcasts both `{type:"state"}` (our format) and `{type:"telemetry_update"}` (Casey's format). This allowed the React fork to work with minimal changes.
+
+5. **Arduino over ESP-IDF.** Casey's firmware is ESP-IDF in C with OLED driver, WiFi Manager, and median filtering. We use Arduino — simpler toolchain, faster iteration, one-liner compile/upload. Tradeoff: less sophisticated filtering, no WiFi Manager.
+
+---
+
+## What Casey's Original Has That We Don't
+
+| Feature | Status | Priority for Demo |
+|---|---|---|
+| WiFi Manager captive portal | ❌ Hardcoded SSID | High |
+| Maintenance thresholds UI | ❌ Hardcoded in `evaluateAlerts` | High |
+| `/api/dashboard/stats` endpoint | ❌ KPI cards show dummy data | High |
+| Seed data (24h history) | ❌ Charts empty without ESP32 | High |
+| 24h trend charts (LineChart) | ❌ Recharts removed | Medium |
+| GaugeCard min/max/optimal labels | ⚠️ Partial | Medium |
+| Device metadata (name, location, floor) | ❌ Only "Test Sensor" | Medium |
+| Data tables with pagination | ❌ | Medium |
+| 50-sample median ADC filter | ❌ | Medium |
+| Settings page (WiFi/AI/MQTT/WorkBuddy) | ❌ Mostly placeholder shells | Low |
+| User Management | ❌ Single-user demo | Low |
+| WhatsApp integration | ❌ No API key | Low |
+| Automations (scheduled tasks) | ❌ AI agent covers this | Low |
+| Multi-tenancy (offices, roles) | ❌ Deferred | Low |
+| Bilingual device names / i18n | ❌ English only | Low |
+
+## File Map
 
 ```
 C:\Projects\Prototype\
-├── esp32-sketch/
-│   └── esp32-sketch.ino      # Arduino sketch: WSS client, LED control, ping/pong
-├── iot-hub/
+├── ARCHITECTURE.md            # System architecture (Agent Alpha)
+├── PROTOCOL.md                # Wire contract (all agents)
+├── README.md                  # This file
+├── firmware/                  # Agent Firmware domain
+│   ├── FIRMWARE.md            # Firmware module spec
+│   └── esp32/
+│       └── esp32.ino          # Unified sketch (pH + TDS + temp + LED + OLED)
+├── edge/                      # Agent Edge domain
+│   ├── EDGE.md                # Edge module spec
+│   ├── DASHBOARD.md           # Dashboard spec
 │   ├── src/
-│   │   ├── index.ts           # Cloudflare Worker: routes, dashboard HTML
-│   │   ├── index.mjs          # Bundled ES module (esbuild output)
-│   │   └── device-hub.ts      # Durable Object class: state, commands, broadcast
-│   ├── toggle-led.mjs         # Node.js random LED toggler (overnight testing)
-│   ├── graph-results.py       # Python: reads toggle-log.jsonl, produces charts
-│   ├── package.json
-│   └── wrangler.jsonc         # Wrangler config: DO binding + SQLite migration
+│   │   ├── index.ts           # Worker: routes, dashboard HTML, REST API
+│   │   ├── device-hub.ts      # DeviceHub DO: hot path, alarm, broadcast, relay
+│   │   ├── agent.ts           # GreenyAgent DO: AI chat, calibration state machine
+│   │   └── index.mjs          # Bundled ES module (esbuild output)
+│   ├── db/
+│   │   └── schema.sql         # D1 schema
+│   ├── wrangler.jsonc
+│   └── package.json
+├── tools/                     # Shared utilities
+│   ├── toggle-led.mjs         # Random LED toggler (overnight testing)
+│   ├── graph-results.py       # Python chart generator
+│   └── send-cal.py            # Serial calibration bridge (DEPRECATED)
 ├── aiot-control/              # Legacy MQTT firmware (archived)
 └── ProjectFunConnect/         # Legacy firmware build outputs (archived)
 ```
 
-## How to use
-
-### 1. Deploy the Worker + DO
+## Deploy
 
 ```bash
-cd iot-hub
-set CLOUDFLARE_API_TOKEN=<FunConnect token>
+# 1. Bundle Worker
+cd edge
 npx esbuild src/index.ts --bundle --format=esm --outfile=src/index.mjs --external:cloudflare:workers
-# Then upload via Cloudflare API multipart, or:
-set WRANGLER_HOME=%CD%\.wrangler
-wrangler deploy
+
+# 2. Deploy Worker + DO + D1 (API multipart — wrangler has Windows junction issues)
+curl -X PUT \
+  "https://api.cloudflare.com/client/v4/accounts/758cece0f853404f97b17f0ff86b5190/workers/scripts/iot-hub" \
+  -H "Authorization: Bearer <FunConnect token>" \
+  -F 'metadata={"main_module":"index.mjs","compatibility_date":"2025-12-01","compatibility_flags":["nodejs_compat"],"bindings":[...]};type=application/json' \
+  -F 'index.mjs=@src/index.mjs;type=application/javascript+module'
+
+# 3. Flash ESP32
+arduino-cli compile --fqbn esp32:esp32:esp32 firmware/esp32
+esptool --chip esp32 --port COM3 --baud 921600 write-flash 0x10000 <build-path>/esp32.ino.bin
 ```
 
-### 2. Flash the ESP32
+## Non-Negotiables
 
-```bash
-arduino-cli compile --fqbn esp32:esp32:esp32 esp32-sketch
-arduino-cli upload  --fqbn esp32:esp32:esp32 -p COM3 esp32-sketch
-```
-
-Edit `WIFI_SSID` and `WIFI_PASS` in the sketch before compiling.
-
-### 3. Open the dashboard
-
-```
-https://iot-hub.funconnect.workers.dev/
-```
-
-Buttons toggle the ESP32 LED. Latency displayed. Connection status live.
-
-### 4. Run random toggle test
-
-```bash
-node iot-hub/toggle-led.mjs
-# Ctrl+C to stop
-node iot-hub/toggle-led.mjs --stats   # distribution charts
-```
-
-### 5. Watch logs
-
-```bash
-set WRANGLER_HOME=%CD%\.wrangler
-wrangler tail iot-hub --format pretty
-```
-
-### 6. Check quota
-
-```bash
-curl -X POST https://api.cloudflare.com/client/v4/graphql \
-  -H "Authorization: Bearer <token>" \
-  -d '{"query":"{ viewer { accounts(filter: {accountTag: \"...\"}) { workersInvocationsAdaptive(...) { sum { requests duration } } } } }"}'
-```
-
-## Quota safety
-
-| Operation | Cost | Free tier limit |
-|---|---|---|
-| WebSocket message (incoming) | 1/20 request | 100K req/day |
-| DO duration (handler CPU) | GB-s | 313K GB-s/day |
-| DO storage (SQLite) | GB-month | 5 GB total |
-| SQLite row write | 1 write | 100K writes/day |
-
-One ESP32 at 1 ping/10s + occasional commands = ~2% of free tier per day.
-
-## Overnight test data
-
-13 hours, 687 toggles:
-- **RTT:** P50=577ms, P90=870ms, P99=1459ms (no very-cold spikes > 2s)
-- **Duration:** 50% in 10s-1m bursts, 9% in 5-30m idle gaps
-- **Reliability:** 0 failures, 1 disconnect/reconnect (5 seconds)
-- **Quota:** Negligible (< 700 WS messages after 20:1 ratio)
-
-## Operating philosophy
-
-1. **DO is the canonical state.** The real state lives in the Durable Object, not the device. Every consumer reads from the DO, never from the device directly.
-2. **WSS + JSON is the universal protocol.** Every consumer speaks it. No adapters.
-3. **Hibernation is non-negotiable.** `ctx.acceptWebSocket()`, zero-I/O constructor, no pending promises.
-4. **The Cloudflare API is the agent's control plane.** Workers, DO, D1, DNS, routes, analytics — one token.
-5. **Measure, don't assume.** Overnight tests, serial timestamps, `wrangler tail`, GraphQL analytics.
+- `ctx.acceptWebSocket(server)` — never `server.accept()`. The latter prevents hibernation entirely.
+- Zero `await` calls in `webSocketMessage()`. All hot-path storage is synchronous `ctx.storage.sql.exec()`.
+- Constructor restores WebSocket connections from `ctx.getWebSockets().forEach()` + `deserializeAttachment()`. Must be zero-I/O.
+- `finally { setAlarm }` — always reschedule, even on failure. Without this, 6 consecutive alarm failures permanently kill the alarm.
+- Calibrate commands are QoS 0 (direct forward, never queued). set_led is QoS 1 (queued in relay_queue).
+- All `loadCalibration()` values must use saved-pattern: save before `EEPROM.get()`, restore if invalid. Never trust EEPROM.
