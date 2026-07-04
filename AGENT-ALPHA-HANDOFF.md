@@ -397,6 +397,180 @@ curl -X POST https://api.cloudflare.com/client/v4/graphql \
 ```
 Result: ~14 seconds total DO compute over a full session. Hibernation confirmed — no background billing.
 
+## Session Update — July 2026: GREENY Fork Deployment Plan
+
+**Context:** The user's supervisor wants a GREENY-class production backend deployed. This session surveyed Casey Lai's production GREENY system (`ai-caseylai/greeny-smart-hydroponics` on GitHub), verified API token permissions, analyzed DO+D1 quota for the free tier, and drafted a 6-phase fork deployment plan. No code was executed — this was a planning session.
+
+### Key Discovery: Casey Lai's GREENY System
+
+ESP32 #2 was originally shipped running Casey's GREENY firmware (ESP-IDF v5.3.2, project `greeny-sensor`). We overwrote it with Arduino, but Casey's production system is now fully analyzed as a reference architecture.
+
+**Repo:** `https://github.com/ai-caseylai/greeny-smart-hydroponics` (48 commits, public)
+**Production URL:** `greenie.techforliving.net` (Pages), `greeny-ws.ai-caseylai.workers.dev` (WS Worker)
+
+Architecture:
+```
+ESP32 → HTTPS POST → Pages Functions → D1 (SQLite)
+ESP32 → WSS → Worker + DO (Hibernation API)
+React Frontend (Vite + Tailwind + Recharts + i18n)
+```
+
+Key architectural decisions in GREENY:
+- **Dual telemetry:** HTTPS POST (simple, unidirectional) AND WSS (real-time, bidirectional). The DO writes to D1 on every telemetry for both historical querying AND real-time broadcast.
+- **DO scope:** Per-office (`idFromName("v2-office-{officeId}")`), not per-device. One DO manages all devices in an office/tenant.
+- **Relay queue:** D1-based `relay_queue` table — commands survive device disconnections and are delivered on the next telemetry cycle. This is the single best pattern to borrow.
+- **Auth:** JWT (HS256 via Web Crypto, zero npm deps) with PBKDF2 password hashing. Whitelist for unauthenticated paths (`POST /api/telemetry`, `POST /api/auth/login`).
+- **Alerting:** Auto-generated on every telemetry write. Thresholds: pH < 5.5 or > 7.0, EC > 2000, water_temp < 18°C or > 30°C.
+- **D1 schema:** 5 tables (users, devices, telemetry, alerts, settings) + runtime tables (relay_queue, relay_log) + 6 migration files adding spectral sensors, racks, roles, i18n.
+
+### GREENY vs. Prototype — Feature Gap
+
+| Capability | Prototype | GREENY | Priority for fork |
+|---|---|---|---|
+| WSS + DO Hibernation | ✅ Proven | ✅ | Keep |
+| D1 persistence | ❌ | ✅ | Phase 1 |
+| REST API | ❌ | ✅ (16 endpoints) | Phase 3 |
+| Auth (JWT) | ❌ | ✅ | Phase 3 |
+| Alerting | ❌ | ✅ (auto on telemetry) | Phase 4 |
+| Relay queue | ❌ | ✅ (offline-safe) | Phase 4 |
+| Multi-tenancy | ❌ | ✅ (offices, roles) | Deferred |
+| React dashboard | ❌ (inline HTML) | ✅ (Vite + Tailwind) | Deferred |
+| Rack management | ❌ | ✅ | Deferred |
+| Spectral sensors | ❌ | ✅ (NDVI) | Deferred |
+| WhatsApp integration | ❌ | ✅ (WorkBuddy) | Deferred |
+
+### GREENY Fork Deployment Plan (6 Phases)
+
+**Naming:** New Worker = `greeny-hub`, D1 database = `greeny-db`, workers.dev subdomain = `greeny-hub.funconnect.workers.dev`. The existing `iot-hub` Worker and `cyberpi.trade` domain are **UNTOCUHED**.
+
+**Phase 1 — D1 Database + Schema (API)**
+- Create `greeny-db` via `POST /accounts/:id/d1/database`
+- Run schema: users, devices, telemetry (with indices), alerts (with acknowledged column), settings, relay_queue
+- Seed admin user (PBKDF2 hash of `admin123`)
+- Seed default thresholds in settings table (ph_min=5.5, ph_max=8.5, ec_max=2000, temp_min=18, temp_max=30)
+- Smoke test: query sqlite_master, verify admin user exists
+
+**Phase 2 — New Worker `greeny-hub` (bundle + API deploy)**
+- Create `C:\Projects\Prototype\greeny-hub\` project directory
+- `device-hub.ts` — DO class with D1 writes, alert generation, relay queue checks
+- `index.ts` — Worker with D1 binding, REST route stubs, dashboard HTML
+- Bundle with esbuild, deploy via multipart API upload (same method as iot-hub)
+- Enable workers.dev subdomain
+- Smoke test: `GET /health` → `{"status":"ok"}`, WSS upgrade → 101
+
+**Phase 3 — REST API + Auth**
+- JWT auth: sign/verify via Web Crypto (HS256), 24h expiry, zero npm deps
+- PBKDF2 password hashing via `crypto.subtle.deriveBits()`
+- Middleware: skip auth for `POST /api/auth/login` and `POST /api/telemetry`
+- Endpoints: login, telemetry history, device list, alerts, relay command
+- Smoke test: login → JWT, protected endpoint → 401 without token, telemetry → D1 rows
+
+**Phase 4 — Alerting + Relay Queue in DO**
+- DO generates alerts on telemetry: pH < 5.5 or > 8.5, EC > 2000, temp < 18°C or > 30°C
+- DO checks `relay_queue` table on every telemetry and ping
+- `POST /api/relay` endpoint writes to relay_queue
+- Smoke test: out-of-range telemetry → alert row in D1, relay command → ESP32 receives relay_cmd
+
+**Phase 5 — ESP32 Integration**
+- Edit `esp32-sketch-sensor.ino`: change `WS_HOST` to `greeny-hub.funconnect.workers.dev`
+- Compile, flash, verify WSS connection and telemetry flow
+- Smoke test: serial monitor shows connection, D1 has telemetry rows, dashboard live
+
+**Phase 6 — Production Dashboard**
+- Enhanced inline HTML: login form, sensor gauges (WSS), telemetry history table (REST), alert list, LED/relay control
+- JWT stored in sessionStorage, included in WSS handshake query param
+- Dark theme (#0f172a), single-page with tab navigation
+- Smoke test: supervisor opens dashboard → logs in → sees live data
+
+### Permissions Verification (July 2026)
+
+All permissions confirmed with 200 HTTP responses:
+
+| Permission | API endpoint tested | Status |
+|---|---|---|
+| Workers Scripts Edit | `GET /accounts/:id/workers/scripts` | 200 ✅ |
+| D1 Edit | `GET /accounts/:id/d1/database` | 200 ✅ |
+| Workers Routes Edit | `GET /zones/:id/workers/routes` | 200 ✅ |
+| DNS Edit | `GET /zones/:id/dns_records` | 200 ✅ |
+| Token validity | `GET /user/tokens/verify` | Active ✅ |
+
+### DO + D1 Quota Analysis (Free Tier)
+
+Sourced from Cloudflare's official pricing page (July 2026):
+- Requests: 100,000/day. WSS messages at 20:1 ratio → 8,640 messages = 432 billed requests.
+- Duration: 313,000 GB-s/day. 5ms handler × 8,640 wakes = ~2.2 GB-s/day. **Hibernation eliminates duration cost.**
+- D1 rows written: 100,000/day. ~17,000 writes/day for 1 device (telemetry INSERT + device UPSERT + optional alerts). **17% of free tier.**
+- D1 rows read: 5,000,000/day. Negligible for dashboard queries.
+- D1 storage: 5 GB. KB-range per row. Negligible.
+
+**Bottleneck:** D1 writes. At 10s telemetry interval, the free tier supports ~5 devices before hitting the 100K/day limit. Mitigations: batch telemetry (send every 30s instead of 10s), or upgrade to Paid ($1.00/million writes).
+
+### Refined Phase 1 Schema (After GREENY Comparison)
+
+Compared against Casey's `schema.sql`, `seed.sql`, and migration `004_telemetry_sensors.sql`. Critical additions:
+
+| Addition | Source | Why |
+|---|---|---|
+| 3 indices on `telemetry`: device_id, ts_ms, composite | Casey schema.sql:22-24 | Without indices, every history query is a full table scan |
+| `acknowledged INTEGER DEFAULT 0` on alerts | Casey schema.sql:34 | Needed for the acknowledge endpoint |
+| CHECK constraints on status, type, severity, role | Casey schema.sql:14,32-33,6 | DB-level data integrity |
+| `settings` table (key-value) | Casey schema.sql:38-42 | Stores alert thresholds, so DO can read them instead of hardcoding |
+| `do_value`, `water_level` on telemetry | Casey schema.sql:19-20 | Future-proof columns with DEFAULT 0 — no INSERT changes when sensors added |
+| `relay1`, `relay2` on telemetry | Casey migration 004 | Stores relay state alongside each reading |
+| `offline` alert type | Casey schema.sql:32 | Most common alert in production |
+| `active INTEGER DEFAULT 1` on users | Casey schema.sql:6 | Disable accounts without deleting |
+| Index on `relay_queue(device_id)` | Best practice | DO queries by device_id on every telemetry |
+
+### Deploy Method (Same as Prototype)
+
+wrangler has Windows junction permission issues. Deploy via Cloudflare API multipart upload:
+```bash
+# Bundle
+npx esbuild src/index.ts --bundle --format=esm --outfile=src/index.mjs --external:cloudflare:workers
+
+# Deploy Worker with D1 + DO bindings
+curl -X PUT \
+  "https://api.cloudflare.com/client/v4/accounts/758cece0f853404f97b17f0ff86b5190/workers/scripts/greeny-hub" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -F 'metadata={"main_module":"index.mjs","compatibility_date":"2025-12-01","compatibility_flags":["nodejs_compat"],"bindings":[{"name":"DEVICE_HUB","type":"durable_object_namespace","class_name":"DeviceHub"},{"name":"DB","type":"d1","id":"<DB_ID>"}],"migrations":{"tag":"v1","new_sqlite_classes":["DeviceHub"]}};type=application/json' \
+  -F 'index.mjs=@src/index.mjs;type=application/javascript+module'
+
+# Enable workers.dev subdomain
+curl -X POST \
+  "https://api.cloudflare.com/client/v4/accounts/758cece0f853404f97b17f0ff86b5190/workers/scripts/greeny-hub/subdomain" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -d '{"enabled":true}'
+```
+
+### What MUST NOT Be Touched
+
+- `iot-hub` Worker — the working Prototype. Do not modify, do not redeploy.
+- `cyberpi.trade` DNS/route — serves the Prototype. Do not add routes for greeny-hub here.
+- `C:\Projects\Prototype\iot-hub\` — source files. Do not edit.
+- `C:\Projects\Prototype\esp32-sketch-sensor\esp32-sketch-sensor.ino` — only the `WS_HOST` string changes (Phase 5), nothing else.
+
+### GREENY Source Files Analyzed (for reference during implementation)
+
+| File | What to borrow |
+|---|---|
+| `ws-worker/src/DeviceHub.ts` | D1 telemetry writes, alert generation, relay queue check pattern, broadcastToDashboards |
+| `ws-worker/src/index.ts` | Worker routes: /ws upgrade, /health, /relay POST, CORS |
+| `functions/api/telemetry.ts` | Dual-path telemetry (HTTPS POST + WSS), alert thresholds, device upsert pattern |
+| `functions/api/_middleware.ts` | JWT auth middleware with whitelist paths |
+| `functions/_lib/jwt.ts` | JWT sign/verify via Web Crypto — zero deps, ~50 lines |
+| `db/schema.sql` | Table definitions, CHECK constraints, indices |
+| `db/seed.sql` | Admin user seed, demo devices, settings defaults |
+
+### Websites Referenced (This Session)
+
+| URL | Purpose |
+|---|---|
+| https://github.com/ai-caseylai/greeny-smart-hydroponics | Casey's production GREENY system — full architecture reference |
+| https://developers.cloudflare.com/durable-objects/platform/pricing/ | DO quota + billing: free tier limits, WSS 20:1 ratio, hibernation cost model |
+| https://developers.cloudflare.com/durable-objects/best-practices/websockets/ | WebSocket Hibernation API, serializeAttachment, constructor patterns |
+| https://developers.cloudflare.com/d1/get-started/ | D1 create, bind, query workflow |
+| https://developers.cloudflare.com/workers/wrangler/configuration/ | Wrangler config: d1_databases binding, durable_objects binding, migrations |
+
 ## Websites Referenced
 
 | URL | Purpose |

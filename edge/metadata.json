@@ -1,0 +1,26 @@
+{
+  "main_module": "index.mjs",
+  "bindings": [
+    {
+      "type": "durable_object_namespace",
+      "name": "DEVICE_HUB",
+      "class_name": "DeviceHub"
+    },
+    {
+      "type": "durable_object_namespace",
+      "name": "GREENY_AGENT",
+      "class_name": "GreenyAgent"
+    },
+    {
+      "type": "d1",
+      "name": "DB",
+      "id": "30ef106c-3f02-4777-b52a-66b5d0409fa2"
+    },
+    {
+      "type": "ai",
+      "name": "AI"
+    }
+  ],
+  "compatibility_date": "2025-12-01",
+  "compatibility_flags": ["nodejs_compat"]
+}
