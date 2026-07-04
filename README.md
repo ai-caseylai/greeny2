@@ -169,26 +169,6 @@ The agent lives INSIDE the DO, not beside it. It reads `ctx.storage.sql` on the 
 
 ---
 
-## What Casey's Original Has That We Don't
-
-| Feature | Status | Priority for Demo |
-|---|---|---|
-| WiFi Manager captive portal | ❌ Hardcoded SSID | High |
-| Maintenance thresholds UI | ❌ Hardcoded in `evaluateAlerts` | High |
-| `/api/dashboard/stats` endpoint | ❌ KPI cards show dummy data | High |
-| Seed data (24h history) | ❌ Charts empty without ESP32 | High |
-| 24h trend charts (LineChart) | ❌ Recharts removed | Medium |
-| GaugeCard min/max/optimal labels | ⚠️ Partial | Medium |
-| Device metadata (name, location, floor) | ❌ Only "Test Sensor" | Medium |
-| Data tables with pagination | ❌ | Medium |
-| 50-sample median ADC filter | ❌ | Medium |
-| Settings page (WiFi/AI/MQTT/WorkBuddy) | ❌ Mostly placeholder shells | Low |
-| User Management | ❌ Single-user demo | Low |
-| WhatsApp integration | ❌ No API key | Low |
-| Automations (scheduled tasks) | ❌ AI agent covers this | Low |
-| Multi-tenancy (offices, roles) | ❌ Deferred | Low |
-| Bilingual device names / i18n | ❌ English only | Low |
-
 ## File Map
 
 ```
