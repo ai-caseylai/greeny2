@@ -10,7 +10,8 @@
     "next": "下一頁",
     "noData": "無資料",
     "search": "搜尋設備...",
-    "never": "從未"
+    "never": "從未",
+    "add": "新增"
   },
   "sidebar": {
     "dashboard": "儀表板",
@@ -18,7 +19,8 @@
     "devices": "設備",
     "alerts": "警報",
     "settings": "設定",
-    "brand": "Greeny Alpha · 科技生活"
+    "brand": "Greeny Alpha · 科技生活",
+    "racks": "貨架"
   },
   "header": {
     "logout": "登出",
@@ -182,5 +184,50 @@
     "warning": "警告",
     "alarm": "警報",
     "maintenance": "維護中"
+  },
+  "racks": {
+    "title": "貨架管理",
+    "offices": "據點/租戶",
+    "addOffice": "新增據點",
+    "editOffice": "編輯據點",
+    "officeName": "據點名稱",
+    "contactPerson": "聯絡人",
+    "contactPhone": "聯絡電話",
+    "whatsappNumber": "WhatsApp 號碼",
+    "notes": "備註",
+    "rackCount": "貨架數量",
+    "noOffices": "暫無據點",
+    "noOfficesDesc": "點擊「新增據點」開始管理貨架",
+    "addRack": "新增貨架",
+    "editRack": "編輯貨架",
+    "rackName": "貨架名稱",
+    "linkedDevice": "綁定設備",
+    "noDevice": "無綁定設備",
+    "layerCount": "層數",
+    "location": "位置",
+    "racks": "貨架",
+    "noRacks": "暫無貨架",
+    "addRackDesc": "點擊「新增貨架」開始建立",
+    "vegetables": "種植記錄",
+    "addVegetable": "新增蔬菜",
+    "variety": "品種",
+    "quantity": "數量",
+    "plantedAt": "種植日期",
+    "layer": "第{{number}}層",
+    "layers": "層",
+    "noVegetables": "此層暫無蔬菜",
+    "environment": "環境數據",
+    "temperature": "溫度",
+    "humidity": "濕度",
+    "lightLevel": "光照",
+    "latestEnv": "最新環境數據",
+    "noEnvData": "暫無環境數據",
+    "manual": "手動",
+    "auto": "自動",
+    "allOffices": "所有據點",
+    "deleteConfirm": "確定要刪除嗎？",
+    "phone": "電話",
+    "message": "訊息",
+    "aboutRack": "關於貨架"
   }
 }

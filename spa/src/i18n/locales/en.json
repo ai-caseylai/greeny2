@@ -10,7 +10,8 @@
     "next": "Next",
     "noData": "No data",
     "search": "Search devices...",
-    "never": "Never"
+    "never": "Never",
+    "add": "Add"
   },
   "sidebar": {
     "dashboard": "Dashboard",
@@ -18,7 +19,8 @@
     "devices": "Devices",
     "alerts": "Alerts",
     "settings": "Settings",
-    "brand": "Greeny Alpha · Tech For Living"
+    "brand": "Greeny Alpha · Tech For Living",
+    "racks": "Racks"
   },
   "header": {
     "logout": "Logout",
@@ -182,5 +184,50 @@
     "warning": "Warning",
     "alarm": "Alarm",
     "maintenance": "Maintenance"
+  },
+  "racks": {
+    "title": "Rack Management",
+    "offices": "Office/Tenant",
+    "addOffice": "Add Office",
+    "editOffice": "Edit Office",
+    "officeName": "Office Name",
+    "contactPerson": "Contact Person",
+    "contactPhone": "Contact Phone",
+    "whatsappNumber": "WhatsApp Number",
+    "notes": "Notes",
+    "rackCount": "Number of Racks",
+    "noOffices": "No Offices Yet",
+    "noOfficesDesc": "Click \"Add Office\" to start managing racks",
+    "addRack": "Add Rack",
+    "editRack": "Edit Rack",
+    "rackName": "Rack Name",
+    "linkedDevice": "Linked Device",
+    "noDevice": "No Linked Device",
+    "layerCount": "Layers",
+    "location": "Location",
+    "racks": "Racks",
+    "noRacks": "No Racks Yet",
+    "addRackDesc": "Click \"Add Rack\" to get started",
+    "vegetables": "Vegetables",
+    "addVegetable": "Add Vegetable",
+    "variety": "Variety",
+    "quantity": "Quantity",
+    "plantedAt": "Planted Date",
+    "layer": "Layer {{number}}",
+    "layers": "layers",
+    "noVegetables": "No vegetables on this layer",
+    "environment": "Environment Data",
+    "temperature": "Temperature",
+    "humidity": "Humidity",
+    "lightLevel": "Light Level",
+    "latestEnv": "Latest Environment Data",
+    "noEnvData": "No environment data yet",
+    "manual": "Manual",
+    "auto": "Auto",
+    "allOffices": "All Offices",
+    "deleteConfirm": "Delete this record?",
+    "phone": "Phone",
+    "message": "Message",
+    "aboutRack": "About rack"
   }
 }
