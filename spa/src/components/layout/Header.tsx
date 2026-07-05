@@ -24,7 +24,7 @@ export function Header() {
     i18n.changeLanguage(next)
   }
 
-  const langLabel = i18n.language === 'zh-TW' ? '繁' : i18n.language === 'zh-CN' ? '简' : 'EN'
+  const langLabel = i18n.language === 'zh-TW' ? '🇭🇰' : i18n.language === 'zh-CN' ? '🇨🇳' : '🇬🇧'
 
   return (
     <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border bg-white px-4 lg:px-6">
