@@ -20,7 +20,9 @@
     "alerts": "Alerts",
     "settings": "Settings",
     "brand": "Greeny Alpha · Tech For Living",
-    "racks": "Racks"
+    "racks": "Racks",
+    "crops": "Crops",
+    "users": "Users"
   },
   "header": {
     "logout": "Logout",
