@@ -20,7 +20,9 @@
     "alerts": "警报",
     "settings": "设置",
     "brand": "Greeny Alpha · 科技生活",
-    "racks": "货架"
+    "racks": "货架",
+    "crops": "作物",
+    "users": "用户"
   },
   "header": {
     "logout": "登出",

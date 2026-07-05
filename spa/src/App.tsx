@@ -6,6 +6,8 @@ import DashboardPage from './pages/DashboardPage'
 import WaterQualityPage from './pages/WaterQualityPage'
 import AlertsPage from './pages/AlertsPage'
 import DeviceControlPage from './pages/DeviceControlPage'
+import CropManagementPage from './pages/CropManagementPage'
+import UserManagementPage from './pages/UserManagementPage'
 import SettingsPage from './pages/SettingsPage'
 import RackManagementPage from './pages/racks/RackManagementPage'
 import RackDetailPage from './pages/racks/RackDetailPage'
@@ -36,6 +38,8 @@ export default function App() {
           <Route path="/water-quality" element={<WaterQualityPage />} />
           <Route path="/device-control" element={<DeviceControlPage />} />
           <Route path="/alerts" element={<AlertsPage />} />
+          <Route path="/crops" element={<CropManagementPage />} />
+          <Route path="/users" element={<UserManagementPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/racks" element={<RackManagementPage />} />
           <Route path="/racks/office/:officeId" element={<RackDetailPage />} />
