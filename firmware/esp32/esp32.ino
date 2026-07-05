@@ -255,9 +255,7 @@ void wifiConnectBlocking() {
     USE_SERIAL.println();
     USE_SERIAL.printf("WiFi: Connected. IP = %s\n", WiFi.localIP().toString().c_str());
   } else {
-    USE_SERIAL.println("\nWiFi: FAILED — starting AP mode");
-    inAPMode = true;
-    startCaptivePortal();
+    USE_SERIAL.println("\nWiFi: FAILED to connect");
   }
 }
 
@@ -931,13 +929,6 @@ void setup() {
 
 // ── Loop ────────────────────────────────────────
 void loop() {
-  if (inAPMode) {
-    handleCaptivePortal();
-    static unsigned long lastBlink = 0;
-    if (millis() - lastBlink > 5000) { USE_SERIAL.println("AP mode — accepting clients..."); lastBlink = millis(); }
-    return;
-  }
-
   webSocket.loop();
   handleSerialCalibration();
 
