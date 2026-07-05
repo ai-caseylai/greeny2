@@ -210,3 +210,33 @@ Serial shows `T=~24°C` (ambient). Dashboard state includes valid `temp`.
 
 ### S8: EC non-zero
 With probe in tap water, EC reads ~100-300 μS/cm. If EC is ~5000, probe is dry or disconnected from SEN0244 board.
+
+### S9: WiFi scan (WSS)
+```json
+{"command":"wifi_scan","device_id":"esp32-sensor","params":{}}
+```
+DO broadcasts `{type:"wifi_list","networks":[{ssid,rssi,enc},...]}`. Verify networks appear.
+
+### S10: WiFi set (WSS)
+```json
+{"command":"wifi_set","params":{"ssid":"MyWiFi","pass":"my-password"}}
+```
+ESP32 saves to EEPROM, disconnects, reconnects to new network. DO broadcasts `{type:"wifi_ack","status":"ok"}` on success. Telemetry resumes within 15 seconds.
+
+---
+
+## New Features (2026-07-05)
+
+### WiFi Manager via WSS
+User scans networks from the dashboard, selects one, enters password, ESP32 switches. No captive portal, no physical button. Credentials saved to EEPROM (addresses 40-138: magic byte + SSID + password). Falls back to compiled defaults on failure. 2.4GHz only — ESP32 hardware limitation.
+
+### WebSocket Watchdog
+Detects half-open WebSocket connections (common after Cloudflare Worker deploys where DO→ESP32 path breaks while ESP32→DO telemetry still flows). If 30 seconds pass with zero inbound data from the DO, the ESP32 disconnects and reconnects fresh. Self-healing — no manual replug needed after deploys.
+
+### Calibration Protection
+All four calibration values (kValue, ecOffset, ph7Voltage, phSlope) use the saved-pattern in `loadCalibration()`: save compiled default before `EEPROM.get()`, restore if EEPROM value is invalid. This prevents `EEPROM.get()` from silently clobbering hardcoded defaults before validation runs.
+
+Validation ranges adjusted for the inverted TDS board:
+- `ecOffset`: 0 to 5000 (was ±1000)
+- `tdsKValue`: 0.001 to 10.0 (was 0.1 minimum)
+- `phSlope`: 0.010 to 0.300 (unchanged)

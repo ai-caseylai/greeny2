@@ -228,6 +228,40 @@ alarm():
 | DO storage > 1GB | Alarm flush keeps buffer at ~10 rows; `device_state` is tiny |
 | D1 unavailable during alarm flush | Alarm will retry on next cycle; DO-local buffer accumulates until D1 recovers |
 | Deploy disconnects all WebSockets | ESP32 auto-reconnects (5s interval); dashboard reconnects in JS |
+| Half-open WebSocket after deploy | ESP32 firmware watchdog (30s no inbound → reconnect); DO health check (alarm verifies telemetry arrival) |
+
+---
+
+## Cloudflare API as Agent Control Plane
+
+The FunConnect API token grants access to the entire Cloudflare surface. An AI agent can inspect the pipeline at every layer with a single credential:
+
+```
+GET  /accounts/.../workers/scripts    → deployed Workers, bindings
+GET  /accounts/.../d1/database        → D1 schema, row counts, storage
+POST /accounts/.../graphql            → quota usage, request counts
+PUT  /accounts/.../workers/scripts    → deploy new code
+```
+
+Combined with the REST API (`/api/telemetry`, `/api/devices`, `/api/alerts`) and WebSocket broadcasts, an agent has complete visibility — firmware health via telemetry, edge state via DO-local SQLite, data history via D1, deployment status via Cloudflare API, billing via GraphQL. One token, one surface, no dashboard required.
+
+---
+
+## ESP-Claw — Hierarchical Intelligence
+
+The ESP32 is too constrained for an LLM, but can run a classifier — a finite state machine that handles:
+
+| Connected (Cloud Agent available) | Disconnected (Isolated Soldier) |
+|---|---|
+| Relay mode — forward telemetry | Emergency reflexes — threshold enforcement |
+| Execute commands from DO | "Server is down" status reporting |
+| Stream buffered data on reconnect | Local data buffering |
+
+The cloud agent (GreenyAgent DO + Workers AI) handles heavy reasoning, history queries, calibration guidance, and user communication. The ESP32 handles sub-millisecond reflexes and survives disconnections gracefully. Together they form a hierarchy — fast/dumb at the edge, slow/smart in the cloud. Both speak WSS+JSON on the same API surface.
+
+---
+
+## Deploy Topology
 
 ---
 

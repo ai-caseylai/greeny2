@@ -241,3 +241,22 @@ JWT secret: stored in `settings` D1 table (key=`jwt_secret`) or wrangler secret.
 | 2 | `device-hub.ts` (alarm), `wrangler.jsonc` (D1 binding), `db/schema.sql` | Add alarm handler, D1 binding, create D1 schema |
 | 3 | `index.ts`, `auth.ts` (new) | Add REST routes, JWT middleware, login endpoint |
 | 4 | `index.ts` (DASHBOARD_HTML) | Auth UI, alert panel, gauge polish |
+
+---
+
+## New Features (2026-07-05)
+
+### Generic Command Passthrough
+`handleDashboardCommand` now has a catch-all for unknown `{command:"..."}` messages. Any command not matching `set_led` or `calibrate` is forwarded directly to the ESP32 via `this.esp32ws.send(JSON.stringify(msg))`. Used by `wifi_scan`, `wifi_set`, and future commands. No code changes needed to add new ESP32 commands — just implement the handler in firmware.
+
+### WiFi Broadcast Relay
+The DO broadcasts `{type:"wifi_list"}` and `{type:"wifi_ack"}` from the ESP32 to all dashboard connections. These are handled inside the main `if (meta?.role === "esp32")` block alongside telemetry, ack, and ping. Previously placed as `else if` branches after the block (unreachable bug — fixed by moving inside).
+
+### Bidirectional Health Check
+The DO tracks `this.lastTelemetryMs` — updated on every telemetry message. In the alarm handler, if `this.esp32ws` is non-null but `this.lastTelemetryMs` is still 0 (no telemetry received since connect), the WebSocket is closed. This detects half-open connections where ESP32→DO works but DO→ESP32 is broken — common after Worker deploys. The ESP32's firmware watchdog handles the other direction independently.
+
+### GreenyAgent DO (AI Agent)
+A second DO class (`GreenyAgent`) lives on the same Worker. It reads DeviceHub's DO-local SQLite via internal REST calls (`/do-telemetry`, `/do-alerts`) — same-colo, sub-millisecond, zero quota. Exposed at `POST /api/chat`. Uses Workers AI with pre-fetch pattern: regex intent matching → fetch relevant data → embed in prompt → model interprets. Calibration state machine stored in `ctx.storage.sql`.
+
+### Relay Command Endpoint Extended
+The `/relay-cmd` DO endpoint now supports both set_led (Casey protocol compat: `relay1` field) and calibrate (GreenyAgent: `command:"calibrate"` with params). HTTP `POST /api/relay` proxies through the Worker to this endpoint.
