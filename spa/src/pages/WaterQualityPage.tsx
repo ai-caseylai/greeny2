@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useState, useEffect, useMemo } from 'react'
 import { useDevices } from '../hooks/useDevices'
 import { useTelemetry, normalizeReading } from '../hooks/useSensorData'
@@ -123,6 +124,7 @@ const METRICS = [
 ]
 
 export default function WaterQualityPage() {
+  const { t } = useTranslation()
   const { devices: initialDevices } = useDevices()
   const { data: initialTelemetry, refetch } = useTelemetry(undefined, 200)
 
@@ -311,9 +313,9 @@ export default function WaterQualityPage() {
                   <span className="text-[10px] text-gray-400">{deviceTelemetry.length} records</span>
                   <div className="flex gap-1">
                     <button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0}
-                      className="rounded px-2 py-0.5 text-[10px] border border-border disabled:opacity-30 hover:bg-gray-50">Prev</button>
+                      className="rounded px-2 py-0.5 text-[10px] border border-border disabled:opacity-30 hover:bg-gray-50">{t('common.prev')}</button>
                     <button onClick={() => setPage(Math.min(totalPages - 1, page + 1))} disabled={page >= totalPages - 1}
-                      className="rounded px-2 py-0.5 text-[10px] border border-border disabled:opacity-30 hover:bg-gray-50">Next</button>
+                      className="rounded px-2 py-0.5 text-[10px] border border-border disabled:opacity-30 hover:bg-gray-50">{t('common.next')}</button>
                   </div>
                 </div>
               )}

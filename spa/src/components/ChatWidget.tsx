@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useState, useRef, useEffect, type FormEvent, type KeyboardEvent } from 'react'
 import { MessageCircle, Send, X, Loader2 } from 'lucide-react'
 import { getToken } from '../lib/api'
@@ -7,13 +8,15 @@ interface Message {
   text: string
 }
 
-const EXAMPLE_PROMPTS = [
-  'How are the plants?',
-  'Any alerts?',
-  'Turn on the LED',
-]
+
 
 export function ChatWidget() {
+  const { t } = useTranslation()
+  const EXAMPLE_PROMPTS = [
+    t('chat.howPlants'),
+    t('chat.anyAlerts'),
+    t('chat.turnOnLed'),
+  ]
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
@@ -51,10 +54,10 @@ export function ChatWidget() {
         body: JSON.stringify({ message: trimmed }),
       })
       const data = await res.json()
-      const agentMsg: Message = { role: 'agent', text: data.reply || 'Sorry, I could not process that.' }
+      const agentMsg: Message = { role: 'agent', text: data.reply || t('chat.sorry') }
       setMessages(prev => [...prev, agentMsg])
     } catch {
-      setMessages(prev => [...prev, { role: 'agent', text: 'Network error — try again.' }])
+      setMessages(prev => [...prev, { role: 'agent', text: t('chat.networkError') }])
     } finally {
       setLoading(false)
     }
@@ -90,7 +93,7 @@ export function ChatWidget() {
           <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-gradient-to-r from-[#1B5E20] to-[#2E7D32] text-white shrink-0">
             <div className="flex items-center gap-2">
               <MessageCircle className="h-4 w-4" />
-              <span className="font-semibold text-sm">Greeny Alpha</span>
+              <span className="font-semibold text-sm">{t('chat.title')}</span>
             </div>
             <button onClick={() => setOpen(false)} className="hover:bg-white/10 rounded p-0.5 transition-colors">
               <X className="h-4 w-4" />
@@ -102,7 +105,7 @@ export function ChatWidget() {
             {messages.length === 0 && (
               <div className="flex flex-col items-center justify-center h-full text-center px-4">
                 <MessageCircle className="h-10 w-10 text-gray-300 mb-3" />
-                <p className="text-sm text-gray-500 mb-4">Ask me about your plants</p>
+                <p className="text-sm text-gray-500 mb-4">{t('chat.askMe')}</p>
                 <div className="space-y-2 w-full">
                   {EXAMPLE_PROMPTS.map(prompt => (
                     <button
@@ -150,7 +153,7 @@ export function ChatWidget() {
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Type a message..."
+              placeholder={t('chat.placeholder')}
               disabled={loading}
               className="flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[#00a65a] focus:ring-1 focus:ring-[#00a65a]/20 disabled:opacity-50"
             />

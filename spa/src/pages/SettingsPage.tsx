@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useState, useEffect, useRef } from 'react'
 import { useWebSocket } from '../hooks/useWebSocket'
 import { useToast } from '../components/Toast'
@@ -30,6 +31,7 @@ interface WifiNetwork {
 // ── SettingsPage ──
 
 export default function SettingsPage() {
+  const { t } = useTranslation()
   const firstDeviceId = 'esp32-sensor'
   const { connected: wsConnected, wifiNetworks, wifiScanning, wifiAck, sendCommand } = useWebSocket(firstDeviceId)
   const toast = useToast()

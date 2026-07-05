@@ -1,24 +1,26 @@
+import { useTranslation } from 'react-i18next'
 import { useState } from 'react'
 import { useAlerts } from '../hooks/useSensorData'
 import { AlertTriangle, Clock, CheckCircle, AlertCircle } from 'lucide-react'
 import { timeAgo } from '../lib/utils'
 
 export default function AlertsPage() {
+  const { t } = useTranslation()
   const [filterType, setFilterType] = useState<string>('all')
   const [filterSeverity, setFilterSeverity] = useState<string>('all')
   const acknowledged = filterSeverity === 'pending' ? 0 : filterSeverity === 'resolved' ? 1 : undefined
   const { alerts, loading, acknowledge, refetch } = useAlerts(acknowledged)
 
   const typeLabels: Record<string, string> = {
-    ph_low: 'pH Low',
-    ph_high: 'pH High',
-    ph_abnormal: 'pH Abnormal',
-    ec_high: 'EC High',
-    temp_abnormal: 'Temp Abnormal',
-    do_low: 'DO Low',
-    offline: 'Offline',
-    water_low: 'Water Low',
-    leak: 'Leak',
+    ph_low: t('alerts.typeLabels.ph_low'),
+    ph_high: t('alerts.typeLabels.ph_high'),
+    ph_abnormal: t('alerts.typeLabels.ph_abnormal'),
+    ec_high: t('alerts.typeLabels.ec_high'),
+    temp_abnormal: t('alerts.typeLabels.temp_abnormal'),
+    do_low: t('alerts.typeLabels.do_low'),
+    offline: t('alerts.typeLabels.offline'),
+    water_low: t('alerts.typeLabels.water_low'),
+    leak: t('alerts.typeLabels.leak'),
   }
 
   const filteredAlerts = filterType === 'all' ? alerts : alerts.filter((a) => a.type === filterType)
@@ -29,10 +31,10 @@ export default function AlertsPage() {
   const resolvedCount = alerts.filter((a) => a.acknowledged).length
 
   const statCards = [
-    { label: 'Pending', value: pendingCount, icon: AlertCircle, color: '#FF9800' },
-    { label: 'Today', value: todayCount, icon: AlertTriangle, color: '#F44336' },
-    { label: 'This Week', value: weekCount, icon: Clock, color: '#2196F3' },
-    { label: 'Resolved', value: resolvedCount, icon: CheckCircle, color: '#4CAF50' },
+    { label: t('alerts.pending'), value: pendingCount, icon: AlertCircle, color: '#FF9800' },
+    { label: t('alerts.today'), value: todayCount, icon: AlertTriangle, color: '#F44336' },
+    { label: t('alerts.thisWeek'), value: weekCount, icon: Clock, color: '#2196F3' },
+    { label: t('alerts.resolved'), value: resolvedCount, icon: CheckCircle, color: '#4CAF50' },
   ]
 
   // Pagination
@@ -55,7 +57,7 @@ export default function AlertsPage() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-xl font-bold text-gray-900">Alerts</h2>
+      <h2 className="text-xl font-bold text-gray-900">{t('alerts.title')}</h2>
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -77,34 +79,32 @@ export default function AlertsPage() {
       {/* Filters */}
       <div className="flex items-center gap-3">
         <select value={filterType} onChange={(e) => { setFilterType(e.target.value); setPage(0) }} className="rounded-lg border border-border px-3 py-1.5 text-sm">
-          <option value="all">All Types</option>
+          <option value="all">{t('alerts.allTypes')}</option>
           {alertTypes.map(t => <option key={t} value={t}>{typeLabels[t] || t}</option>)}
         </select>
         <select value={filterSeverity} onChange={(e) => { setFilterSeverity(e.target.value); setPage(0) }} className="rounded-lg border border-border px-3 py-1.5 text-sm">
-          <option value="all">All Status</option>
+          <option value="all">{t('alerts.allStatus')}</option>
           <option value="pending">Pending</option>
           <option value="resolved">Resolved</option>
         </select>
-        <button onClick={refetch} className="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-gray-50">
-          Refresh
-        </button>
+        <button onClick={refetch} className="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-gray-50">{t('common.refresh')}</button>
       </div>
 
       {/* Alert Table */}
       {loading ? (
-        <div className="text-sm text-gray-400">Loading...</div>
+        <div className="text-sm text-gray-400">{t('common.loading')}</div>
       ) : (
         <div className="rounded-xl border border-border bg-white shadow-sm overflow-hidden">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-gray-50 text-left text-gray-500">
-                <th className="px-5 py-3">Severity</th>
-                <th className="px-5 py-3">Type</th>
-                <th className="px-5 py-3">Message</th>
-                <th className="px-5 py-3">Device</th>
-                <th className="px-5 py-3">Time</th>
-                <th className="px-5 py-3">Status</th>
-                <th className="px-5 py-3">Action</th>
+                <th className="px-5 py-3">{t('alerts.severity')}</th>
+                <th className="px-5 py-3">{t('alerts.type')}</th>
+                <th className="px-5 py-3">{t('alerts.message')}</th>
+                <th className="px-5 py-3">{t('alerts.device')}</th>
+                <th className="px-5 py-3">{t('alerts.time')}</th>
+                <th className="px-5 py-3">{t('alerts.status')}</th>
+                <th className="px-5 py-3">{t('alerts.action')}</th>
               </tr>
             </thead>
             <tbody>
@@ -112,7 +112,7 @@ export default function AlertsPage() {
                 <tr key={alert.id} className="border-b border-border/50 hover:bg-gray-50/50">
                   <td className="px-5 py-3">
                     <span className={`rounded px-2 py-0.5 text-xs font-medium ${severityColor(alert.severity)}`}>
-                      {alert.severity === 'critical' ? 'Critical' : alert.severity === 'warning' ? 'Warning' : 'Info'}
+                      {alert.severity === 'critical' ? t('alerts.critical') : alert.severity === 'warning' ? t('alerts.warning') : t('alerts.info')}
                     </span>
                   </td>
                   <td className="px-5 py-3">{typeLabels[alert.type] || alert.type}</td>
@@ -121,23 +121,21 @@ export default function AlertsPage() {
                   <td className="px-5 py-3 text-xs text-gray-400">{timeAgo(alert.created_at)}</td>
                   <td className="px-5 py-3">
                     {alert.acknowledged ? (
-                      <span className="text-xs text-green-600">Acknowledged</span>
+                      <span className="text-xs text-green-600">{t('alerts.acknowledged')}</span>
                     ) : (
                       <span className="text-xs text-amber-600">Pending</span>
                     )}
                   </td>
                   <td className="px-5 py-3">
                     {!alert.acknowledged && (
-                      <button onClick={() => acknowledge(alert.id)} className="rounded bg-[#00a65a] px-2 py-1 text-xs text-white hover:bg-[#00954f]">
-                        Acknowledge
-                      </button>
+                      <button onClick={() => acknowledge(alert.id)} className="rounded bg-[#00a65a] px-2 py-1 text-xs text-white hover:bg-[#00954f]">{t('alerts.acknowledge')}</button>
                     )}
                   </td>
                 </tr>
               ))}
               {pageData.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-5 py-8 text-center text-gray-400">No alerts found</td>
+                  <td colSpan={7} className="px-5 py-8 text-center text-gray-400">{t('alerts.noAlerts')}</td>
                 </tr>
               )}
             </tbody>
@@ -146,8 +144,8 @@ export default function AlertsPage() {
           <div className="flex items-center justify-between px-5 py-3 border-t border-border">
             <span className="text-xs text-gray-400">{filteredAlerts.length} alerts — Page {page + 1} of {totalPages || 1}</span>
             <div className="flex gap-1">
-              <button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0} className="rounded px-2 py-1 text-xs border border-border disabled:opacity-30 hover:bg-gray-50">Prev</button>
-              <button onClick={() => setPage(Math.min(totalPages - 1, page + 1))} disabled={page >= totalPages - 1} className="rounded px-2 py-1 text-xs border border-border disabled:opacity-30 hover:bg-gray-50">Next</button>
+              <button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0} className="rounded px-2 py-1 text-xs border border-border disabled:opacity-30 hover:bg-gray-50">{t('common.prev')}</button>
+              <button onClick={() => setPage(Math.min(totalPages - 1, page + 1))} disabled={page >= totalPages - 1} className="rounded px-2 py-1 text-xs border border-border disabled:opacity-30 hover:bg-gray-50">{t('common.next')}</button>
             </div>
           </div>
         </div>

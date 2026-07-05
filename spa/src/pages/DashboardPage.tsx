@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useDevices } from '../hooks/useDevices'
 import { useTelemetry, normalizeReading } from '../hooks/useSensorData'
@@ -121,6 +122,7 @@ function Sparkline({ data, dataKey, color, height = 100 }: {
 
 // ── DashboardPage ──
 export default function DashboardPage() {
+  const { t } = useTranslation()
   const { devices: initialDevices, loading: devicesLoading } = useDevices()
   const { data: initialTelemetry, loading: telemetryLoading, refetch: refetchTelemetry } = useTelemetry(undefined, 200)
 
@@ -231,14 +233,14 @@ export default function DashboardPage() {
   }
 
   if (loading) {
-    return <div className="flex items-center justify-center h-64 text-gray-400">Loading...</div>
+    return <div className="flex items-center justify-center h-64 text-gray-400">{t('common.loading')}</div>
   }
 
   return (
     <div className="space-y-4">
       {/* Header + compact status strip */}
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold text-gray-900">Dashboard</h2>
+        <h2 className="text-xl font-bold text-gray-900">{t('dashboard.title')}</h2>
         <button onClick={handleRefresh} disabled={refreshing}
           className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-gray-50 disabled:opacity-50">
           <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />Refresh
