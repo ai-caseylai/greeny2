@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useState } from 'react'
 import { useDevices } from '../hooks/useDevices'
 import { useTelemetry } from '../hooks/useSensorData'
@@ -22,11 +23,12 @@ const statusBgColors: Record<string, string> = {
 }
 
 export default function DeviceControlPage() {
+  const { t } = useTranslation()
   const { devices, loading } = useDevices()
   const { data: telemetry } = useTelemetry(undefined, 200)
   const [search, setSearch] = useState('')
 
-  if (loading) return <div className="text-gray-400">Loading...</div>
+  if (loading) return <div className="text-gray-400">{t('common.loading')}</div>
 
   const filtered = devices.filter(d =>
     !search || d.name.toLowerCase().includes(search.toLowerCase()) || (d.device_id || d.id).toLowerCase().includes(search.toLowerCase())
@@ -38,14 +40,14 @@ export default function DeviceControlPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold text-gray-900">Device Control</h2>
+        <h2 className="text-xl font-bold text-gray-900">{t('deviceControl.title')}</h2>
         <div className="flex items-center gap-3">
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-gray-400" />
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search devices..."
+              placeholder={t('common.search')}
               className="rounded-lg border border-border pl-8 pr-3 py-1.5 text-sm outline-none focus:border-[#00a65a] w-56"
             />
           </div>
@@ -70,6 +72,7 @@ export default function DeviceControlPage() {
 }
 
 function DeviceCard({ device: d, telemetry }: { device: any; telemetry: any[] }) {
+  const { t } = useTranslation()
   const deviceId = d.device_id || d.id
   const { connected: wsConnected, ledState, toggleLed } = useWebSocket(deviceId)
   const latestT = telemetry.find((t: any) => t.device_id === deviceId)
@@ -87,9 +90,9 @@ function DeviceCard({ device: d, telemetry }: { device: any; telemetry: any[] })
     setToggling(false)
   }
 
-  const statusLabel = d.status === 'online' ? 'Online' : d.status === 'offline' ? 'Offline' :
-    d.status === 'warning' ? 'Warning' : d.status === 'alarm' ? 'Alarm' :
-    d.status === 'maintenance' ? 'Maintenance' : d.status
+    const statusLabel = d.status === 'online' ? t('deviceControl.online') : d.status === 'offline' ? t('deviceControl.offline') :
+    d.status === 'warning' ? t('deviceControl.warning') : d.status === 'alarm' ? t('deviceControl.alarm') :
+    d.status === 'maintenance' ? t('deviceControl.maintenance') : d.status
 
   return (
     <div className={`rounded-xl border p-5 shadow-sm transition-all hover:shadow-md ${statusBgColors[d.status] || 'border-border bg-white'}`}>
@@ -158,19 +161,19 @@ function DeviceCard({ device: d, telemetry }: { device: any; telemetry: any[] })
               ? <ToggleRight className="h-5 w-5 text-[#00a65a]" />
               : <ToggleLeft className="h-5 w-5 text-gray-400" />
             }
-            <span className={ledOn ? 'text-[#00a65a] font-medium' : 'text-gray-500'}>LED</span>
+            <span className={ledOn ? 'text-[#00a65a] font-medium' : 'text-gray-500'}>{t('deviceControl.led')}</span>
           </button>
           <span className={`h-1.5 w-1.5 rounded-full ${ledOn ? 'bg-[#00a65a] animate-pulse' : 'bg-gray-300'}`} />
         </div>
         <span className={`flex items-center gap-1 text-[10px] ${wsConnected ? 'text-green-600' : 'text-gray-400'}`}>
           {wsConnected ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
-          {wsConnected ? 'Live' : 'Polling'}
+          {wsConnected ? t('deviceControl.live') : t('deviceControl.polling')}
         </span>
       </div>
 
       {/* Footer */}
       <div className="flex items-center justify-between pt-2 text-[10px] text-gray-400">
-        <span>{d.last_seen ? timeAgo(d.last_seen) : 'Never'}</span>
+        <span>{d.last_seen ? timeAgo(d.last_seen) : t('common.never')}</span>
       </div>
     </div>
   )
