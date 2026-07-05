@@ -52,6 +52,9 @@ const char* WS_PATH       = "/device/esp32-sensor";
 // ─────────────────────────────────────────────────
 
 WebSocketsClient webSocket;
+WiFiServer captiveServer(80);
+bool inAPMode = false;
+
 OneWire oneWire(ONEWIRE_PIN);
 DallasTemperature ds18b20(&oneWire);
 Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
@@ -252,7 +255,9 @@ void wifiConnectBlocking() {
     USE_SERIAL.println();
     USE_SERIAL.printf("WiFi: Connected. IP = %s\n", WiFi.localIP().toString().c_str());
   } else {
-    USE_SERIAL.println("\nWiFi: FAILED to connect");
+    USE_SERIAL.println("\nWiFi: FAILED — starting AP mode");
+    inAPMode = true;
+    startCaptivePortal();
   }
 }
 
@@ -745,6 +750,166 @@ void sendTelemetry() {
              WiFi.localIP().toString().c_str());
 }
 
+// ── Captive Portal HTML (dark theme, matches dashboard) ──
+static const char CP_HTML[] PROGMEM =
+"<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+"<title>Greeny Alpha — WiFi Setup</title>"
+"<style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;"
+"display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0}"
+"form{background:#1e293b;padding:30px;border-radius:12px;width:360px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.5)}"
+"h2{color:#38bdf8;text-align:center;margin-bottom:20px}"
+"label{display:block;margin-top:14px;font-size:13px;color:#94a3b8}"
+"input,select{width:100%;padding:10px;margin-top:4px;border:1px solid #334155;border-radius:8px;"
+"background:#0f172a;color:#e2e8f0;font-size:14px;box-sizing:border-box}"
+"button{width:100%;padding:12px;margin-top:18px;background:#00a65a;border:none;border-radius:8px;"
+"color:#fff;font-size:15px;cursor:pointer;font-weight:600}"
+"button:hover{background:#00954f}"
+"button.scan{background:#334155;margin-top:6px;font-size:12px;padding:8px}"
+"button.scan:hover{background:#475569}"
+".msg{text-align:center;font-size:12px;margin-top:12px;color:#64748b}"
+"</style></head><body><form method='POST' action='/save'>"
+"<h2>Greeny Alpha WiFi</h2>"
+"<label>Network</label>"
+"<input id='ssid' name='ssid' list='ssid-list' placeholder='Select network...' required>"
+"<datalist id='ssid-list'></datalist>"
+"<button type='button' class='scan' onclick='scanWiFi()'>Scan Networks</button>"
+"<label>Password</label><input name='pass' id='pass' type='password' placeholder='WiFi password'>"
+"<button type='submit'>Save &amp; Reboot</button>"
+"<p class='msg'>ESP32 will restart with new WiFi settings</p>"
+"</form>"
+"<script>"
+"async function scanWiFi(){"
+"var b=document.querySelector('.scan');b.textContent='Scanning...';b.disabled=true;"
+"try{"
+"var r=await fetch('/scan');var data=await r.json();"
+"var list=document.getElementById('ssid-list');list.innerHTML='';"
+"data.forEach(function(s){var o=document.createElement('option');o.value=s;list.appendChild(o);});"
+"var sel=document.getElementById('ssid');if(data.length>0){sel.value=data[0];sel.focus();}"
+"}catch(e){}"
+"b.textContent='Scan Networks';b.disabled=false;}"
+"scanWiFi();"
+"</script></body></html>";
+
+static const char CP_OK[] PROGMEM =
+"<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+"<title>Saved</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"
+"background:#0f172a;color:#e2e8f0;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0}"
+"div{text-align:center}h2{color:#00a65a}p{color:#94a3b8}</style></head>"
+"<body><div><h2>WiFi Saved!</h2><p>ESP32 is rebooting...</p></div></body></html>";
+
+static String urlDecode(String s) {
+  String r;
+  for (unsigned i = 0; i < s.length(); i++) {
+    if (s[i] == '%' && i+2 < s.length()) {
+      char hi = s[++i], lo = s[++i];
+      int h = (hi >= 'A') ? (hi & 0xDF) - 'A' + 10 : hi - '0';
+      int l = (lo >= 'A') ? (lo & 0xDF) - 'A' + 10 : lo - '0';
+      r += (char)((h << 4) | l);
+    } else if (s[i] == '+') r += ' ';
+    else r += s[i];
+  }
+  return r;
+}
+
+void startCaptivePortal() {
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP("Greeny-Alpha-Setup");
+  USE_SERIAL.println("AP: Greeny-Alpha-Setup started — connect to 192.168.4.1");
+  captiveServer.begin();
+  USE_SERIAL.println("AP: HTTP server started on port 80");
+}
+
+void handleCaptivePortal() {
+  WiFiClient client = captiveServer.accept();
+  if (!client) return;
+
+  String req = "";
+  while (client.connected()) {
+    if (client.available()) {
+      char c = client.read();
+      req += c;
+      if (req.endsWith("\r\n\r\n")) break;
+    }
+  }
+
+  if (req.startsWith("GET / ")) {
+    client.print("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n");
+    client.print(CP_HTML);
+  }
+  else if (req.startsWith("GET /scan")) {
+    int n = WiFi.scanComplete();
+    if (n == WIFI_SCAN_FAILED || n == 0) {
+      WiFi.scanNetworks(true, true, false);
+      client.print("HTTP/1.1 202 Accepted\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n[]");
+    } else if (n == WIFI_SCAN_RUNNING) {
+      client.print("HTTP/1.1 202 Accepted\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n[]");
+    } else {
+      JsonDocument doc;
+      JsonArray arr = doc.to<JsonArray>();
+      for (int i = 0; i < n; i++) {
+        String ssid = WiFi.SSID(i);
+        if (ssid.length() > 0) arr.add(ssid);
+      }
+      WiFi.scanDelete();
+      String json;
+      serializeJson(doc, json);
+      client.print("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n");
+      client.print(json);
+    }
+  }
+  else if (req.startsWith("POST /save")) {
+    // Read body
+    String body = "";
+    if (req.indexOf("Content-Length:") >= 0) {
+      int cl = req.indexOf("Content-Length:");
+      int clEnd = req.indexOf("\r\n", cl);
+      int len = req.substring(cl+16, clEnd).toInt();
+      while (body.length() < len && client.connected()) {
+        if (client.available()) body += (char)client.read();
+      }
+    }
+    // Parse ssid and pass from form body
+    String ssid, pass;
+    int ssp = body.indexOf("ssid=");
+    if (ssp >= 0) {
+      ssp += 5;
+      int sse = body.indexOf("&", ssp);
+      if (sse < 0) sse = body.length();
+      ssid = urlDecode(body.substring(ssp, sse));
+    }
+    int psp = body.indexOf("pass=");
+    if (psp >= 0) {
+      psp += 5;
+      int pse = body.indexOf("&", psp);
+      if (pse < 0) pse = body.length();
+      pass = urlDecode(body.substring(psp, pse));
+    }
+
+    if (ssid.length() > 0 && ssid.length() < 33) {
+      client.print("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n");
+      client.print(CP_OK);
+      client.stop();
+      ssid.toCharArray(wifiSsid, 33);
+      pass.toCharArray(wifiPass, 65);
+      EEPROM.put(EEPROM_WIFI_FLAG_ADDR, (uint8_t)0xAB);
+      EEPROM.put(EEPROM_WIFI_SSID_ADDR, wifiSsid);
+      EEPROM.put(EEPROM_WIFI_PASS_ADDR, wifiPass);
+      EEPROM.commit();
+      USE_SERIAL.printf("AP: Saved SSID=%s — rebooting\n", wifiSsid);
+      delay(1500);
+      ESP.restart();
+    } else {
+      client.print("HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nInvalid SSID");
+    }
+  }
+  else {
+    // Captive portal redirect: anything else → /
+    client.print("HTTP/1.1 302 Found\r\nLocation: /\r\nConnection: close\r\n\r\n");
+  }
+
+  client.stop();
+}
+
 // ── Setup ───────────────────────────────────────
 void setup() {
   USE_SERIAL.begin(115200);
@@ -802,6 +967,11 @@ void setup() {
 
 // ── Loop ────────────────────────────────────────
 void loop() {
+  if (inAPMode) {
+    handleCaptivePortal();
+    return;
+  }
+
   webSocket.loop();
   handleSerialCalibration();
 
