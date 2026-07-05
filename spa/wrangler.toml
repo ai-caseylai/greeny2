@@ -1,0 +1,15 @@
+name = "greeny"
+compatibility_date = "2024-05-29"
+pages_build_output_dir = "./dist"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "greeny-db"
+database_id = "7191a23e-c43b-4962-b3fb-96818ac2d07c"
+
+[vars]
+API_KEY = ""
+JWT_SECRET = "greeny-jwt-secret-change-in-prod"
+WB_API_KEY = "greeny-wb-api-key-change-in-prod"
+WORKBUDDY_API_URL = ""
+WORKBUDDY_API_KEY = ""
