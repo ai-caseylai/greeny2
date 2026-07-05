@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { apiFetch } from '../lib/api'
+import { mgmtApiFetch } from '../lib/api'
 import type { Rack, RackVegetable, RackEnvironment } from '../types'
 
 export function useRacks(officeId?: number) {
@@ -9,7 +9,7 @@ export function useRacks(officeId?: number) {
   const fetchRacks = useCallback(async () => {
     try {
       const params = officeId ? '?office_id=' + officeId : ''
-      const data = await apiFetch<Rack[]>('/api/racks' + params)
+      const data = await mgmtApiFetch<Rack[]>('/api/racks' + params)
       setRacks(data)
     } catch { /* */ } finally {
       setLoading(false)
@@ -19,18 +19,18 @@ export function useRacks(officeId?: number) {
   useEffect(() => { fetchRacks() }, [fetchRacks])
 
   const createRack = useCallback(async (rack: Partial<Rack>) => {
-    const result = await apiFetch<Rack>('/api/racks', { method: 'POST', body: JSON.stringify(rack) })
+    const result = await mgmtApiFetch<Rack>('/api/racks', { method: 'POST', body: JSON.stringify(rack) })
     fetchRacks()
     return result
   }, [fetchRacks])
 
   const updateRack = useCallback(async (id: number, updates: Partial<Rack>) => {
-    await apiFetch('/api/racks/' + id, { method: 'PUT', body: JSON.stringify(updates) })
+    await mgmtApiFetch('/api/racks/' + id, { method: 'PUT', body: JSON.stringify(updates) })
     fetchRacks()
   }, [fetchRacks])
 
   const deleteRack = useCallback(async (id: number) => {
-    await apiFetch('/api/racks/' + id, { method: 'DELETE' })
+    await mgmtApiFetch('/api/racks/' + id, { method: 'DELETE' })
     fetchRacks()
   }, [fetchRacks])
 
@@ -44,7 +44,7 @@ export function useRackVegetables(rackId?: number) {
   const fetchVegetables = useCallback(async () => {
     if (!rackId) { setVegetables([]); setLoading(false); return }
     try {
-      const data = await apiFetch<RackVegetable[]>('/api/rack-vegetables?rack_id=' + rackId)
+      const data = await mgmtApiFetch<RackVegetable[]>('/api/rack-vegetables?rack_id=' + rackId)
       setVegetables(data)
     } catch { /* */ } finally {
       setLoading(false)
@@ -54,17 +54,17 @@ export function useRackVegetables(rackId?: number) {
   useEffect(() => { fetchVegetables() }, [fetchVegetables])
 
   const addVegetable = useCallback(async (veg: Partial<RackVegetable>) => {
-    await apiFetch('/api/rack-vegetables', { method: 'POST', body: JSON.stringify({ ...veg, rack_id: rackId }) })
+    await mgmtApiFetch('/api/rack-vegetables', { method: 'POST', body: JSON.stringify({ ...veg, rack_id: rackId }) })
     fetchVegetables()
   }, [rackId, fetchVegetables])
 
   const updateVegetable = useCallback(async (id: number, updates: Partial<RackVegetable>) => {
-    await apiFetch('/api/rack-vegetables/' + id, { method: 'PUT', body: JSON.stringify(updates) })
+    await mgmtApiFetch('/api/rack-vegetables/' + id, { method: 'PUT', body: JSON.stringify(updates) })
     fetchVegetables()
   }, [fetchVegetables])
 
   const deleteVegetable = useCallback(async (id: number) => {
-    await apiFetch('/api/rack-vegetables/' + id, { method: 'DELETE' })
+    await mgmtApiFetch('/api/rack-vegetables/' + id, { method: 'DELETE' })
     fetchVegetables()
   }, [fetchVegetables])
 
@@ -78,7 +78,7 @@ export function useRackEnvironment(rackId?: number) {
   const fetchEnv = useCallback(async () => {
     if (!rackId) { setRecords([]); setLoading(false); return }
     try {
-      const data = await apiFetch<RackEnvironment[]>('/api/rack-environment?rack_id=' + rackId)
+      const data = await mgmtApiFetch<RackEnvironment[]>('/api/rack-environment?rack_id=' + rackId)
       setRecords(data)
     } catch { /* */ } finally {
       setLoading(false)
@@ -88,7 +88,7 @@ export function useRackEnvironment(rackId?: number) {
   useEffect(() => { fetchEnv() }, [fetchEnv])
 
   const addRecord = useCallback(async (rec: Partial<RackEnvironment>) => {
-    await apiFetch('/api/rack-environment', { method: 'POST', body: JSON.stringify({ ...rec, rack_id: rackId }) })
+    await mgmtApiFetch('/api/rack-environment', { method: 'POST', body: JSON.stringify({ ...rec, rack_id: rackId }) })
     fetchEnv()
   }, [rackId, fetchEnv])
 
@@ -101,7 +101,7 @@ export function useAutomations() {
 
   const fetchAutomations = useCallback(async () => {
     try {
-      const data = await apiFetch<import('../types').Automation[]>('/api/automations')
+      const data = await mgmtApiFetch<import('../types').Automation[]>('/api/automations')
       setAutomations(data)
     } catch { /* */ } finally {
       setLoading(false)
@@ -111,22 +111,22 @@ export function useAutomations() {
   useEffect(() => { fetchAutomations() }, [fetchAutomations])
 
   const createAutomation = useCallback(async (auto: Partial<import('../types').Automation>) => {
-    await apiFetch('/api/automations', { method: 'POST', body: JSON.stringify(auto) })
+    await mgmtApiFetch('/api/automations', { method: 'POST', body: JSON.stringify(auto) })
     fetchAutomations()
   }, [fetchAutomations])
 
   const updateAutomation = useCallback(async (id: number, updates: Partial<import('../types').Automation>) => {
-    await apiFetch('/api/automations/' + id, { method: 'PUT', body: JSON.stringify(updates) })
+    await mgmtApiFetch('/api/automations/' + id, { method: 'PUT', body: JSON.stringify(updates) })
     fetchAutomations()
   }, [fetchAutomations])
 
   const deleteAutomation = useCallback(async (id: number) => {
-    await apiFetch('/api/automations/' + id, { method: 'DELETE' })
+    await mgmtApiFetch('/api/automations/' + id, { method: 'DELETE' })
     fetchAutomations()
   }, [fetchAutomations])
 
   const runAutomation = useCallback(async (id: number) => {
-    await apiFetch('/api/automations/' + id + '/run', { method: 'POST' })
+    await mgmtApiFetch('/api/automations/' + id + '/run', { method: 'POST' })
     fetchAutomations()
   }, [fetchAutomations])
 

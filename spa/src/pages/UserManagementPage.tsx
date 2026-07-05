@@ -4,7 +4,7 @@ import { Users, Plus, Trash2, Shield, Building2, Eye, Search, Pencil, Key, X } f
 import { useOffice } from '../context/OfficeContext'
 import { useOffices } from '../hooks/useOffices'
 import { useChineseText } from '../hooks/useChineseText'
-import { apiFetch } from '../lib/api'
+import { mgmtApiFetch } from '../lib/api'
 
 interface UserRow {
   id: number
@@ -59,7 +59,7 @@ function EditUserModal({ user, offices, userRole, onClose, onSaved }: {
       if (password) {
         body.password = password
       }
-      await apiFetch(`/users/${user.id}`, {
+      await mgmtApiFetch(`/users/${user.id}`, {
         method: 'PATCH',
         body: JSON.stringify(body),
       })
@@ -166,7 +166,7 @@ export default function UserManagementPage() {
 
   const fetchUsers = useCallback(async () => {
     try {
-      const data = await apiFetch<UserRow[]>('/users')
+      const data = await mgmtApiFetch<UserRow[]>('/users')
       setUsers(data)
     } catch { /* */ } finally { setLoading(false) }
   }, [])
@@ -176,7 +176,7 @@ export default function UserManagementPage() {
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault()
     try {
-      await apiFetch('/users', {
+      await mgmtApiFetch('/users', {
         method: 'POST',
         body: JSON.stringify({
           ...form,
@@ -194,7 +194,7 @@ export default function UserManagementPage() {
   const handleDelete = async (id: number) => {
     if (!confirm(t('messages.confirmDeactivate'))) return
     try {
-      await apiFetch(`/users/${id}`, { method: 'DELETE' })
+      await mgmtApiFetch(`/users/${id}`, { method: 'DELETE' })
       fetchUsers()
     } catch (err: any) {
       alert(t('messages.deactivateFailed') + (err.message || t('messages.unknownError')))
@@ -203,7 +203,7 @@ export default function UserManagementPage() {
 
   const handleReactivate = async (id: number) => {
     try {
-      await apiFetch(`/users/${id}`, {
+      await mgmtApiFetch(`/users/${id}`, {
         method: 'PATCH',
         body: JSON.stringify({ active: 1 }),
       })
