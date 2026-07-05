@@ -812,101 +812,65 @@ static String urlDecode(String s) {
 }
 
 void startCaptivePortal() {
-  WiFi.mode(WIFI_AP);
   WiFi.softAP("Greeny-Alpha-Setup");
-  USE_SERIAL.println("AP: Greeny-Alpha-Setup started — connect to 192.168.4.1");
+  USE_SERIAL.println("AP: Greeny-Alpha-Setup started — 192.168.4.1");
   captiveServer.begin();
-  USE_SERIAL.println("AP: HTTP server started on port 80");
 }
 
 void handleCaptivePortal() {
   WiFiClient client = captiveServer.accept();
   if (!client) return;
 
+  // Read request with timeout
   String req = "";
-  while (client.connected()) {
-    if (client.available()) {
+  unsigned long t = millis();
+  while (client.connected() && millis() - t < 3000) {
+    while (client.available()) {
       char c = client.read();
       req += c;
-      if (req.endsWith("\r\n\r\n")) break;
     }
+    if (req.indexOf("\r\n\r\n") >= 0) break;
   }
+  if (req.length() == 0) { client.stop(); return; }
 
-  if (req.startsWith("GET / ")) {
-    client.print("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n");
-    client.print(CP_HTML);
-  }
-  else if (req.startsWith("GET /scan")) {
+  if (req.indexOf("GET /scan") >= 0) {
     int n = WiFi.scanComplete();
-    if (n == WIFI_SCAN_FAILED || n == 0) {
-      WiFi.scanNetworks(true, true, false);
-      client.print("HTTP/1.1 202 Accepted\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n[]");
-    } else if (n == WIFI_SCAN_RUNNING) {
-      client.print("HTTP/1.1 202 Accepted\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n[]");
-    } else {
-      JsonDocument doc;
-      JsonArray arr = doc.to<JsonArray>();
+    if (n <= 0) { WiFi.scanNetworks(true, true, false); client.print("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n[]"); }
+    else {
+      String json = "[";
       for (int i = 0; i < n; i++) {
-        String ssid = WiFi.SSID(i);
-        if (ssid.length() > 0) arr.add(ssid);
+        if (i) json += ",";
+        json += "\"" + WiFi.SSID(i) + "\"";
       }
       WiFi.scanDelete();
-      String json;
-      serializeJson(doc, json);
-      client.print("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n");
-      client.print(json);
+      client.print("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" + json + "]");
     }
   }
-  else if (req.startsWith("POST /save")) {
+  else if (req.indexOf("POST /save") >= 0) {
     // Read body
-    String body = "";
-    if (req.indexOf("Content-Length:") >= 0) {
-      int cl = req.indexOf("Content-Length:");
-      int clEnd = req.indexOf("\r\n", cl);
-      int len = req.substring(cl+16, clEnd).toInt();
-      while (body.length() < len && client.connected()) {
-        if (client.available()) body += (char)client.read();
+    while (client.available()) { req += (char)client.read(); }
+    int ss = req.indexOf("ssid="), ps = req.indexOf("pass=");
+    if (ss >= 0 && ps >= 0) {
+      String sid = req.substring(ss+5, req.indexOf('&', ss));
+      String pw = req.substring(ps+5, req.indexOf('&', ps) > 0 ? req.indexOf('&', ps) : req.length());
+      sid = urlDecode(sid); pw = urlDecode(pw);
+      if (sid.length() > 0 && sid.length() < 33) {
+        client.print("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n" + String(CP_OK));
+        client.stop();
+        sid.toCharArray(wifiSsid, 33); pw.toCharArray(wifiPass, 65);
+        EEPROM.put(EEPROM_WIFI_FLAG_ADDR, (uint8_t)0xAB);
+        EEPROM.put(EEPROM_WIFI_SSID_ADDR, wifiSsid);
+        EEPROM.put(EEPROM_WIFI_PASS_ADDR, wifiPass);
+        EEPROM.commit();
+        delay(1500);
+        ESP.restart();
       }
-    }
-    // Parse ssid and pass from form body
-    String ssid, pass;
-    int ssp = body.indexOf("ssid=");
-    if (ssp >= 0) {
-      ssp += 5;
-      int sse = body.indexOf("&", ssp);
-      if (sse < 0) sse = body.length();
-      ssid = urlDecode(body.substring(ssp, sse));
-    }
-    int psp = body.indexOf("pass=");
-    if (psp >= 0) {
-      psp += 5;
-      int pse = body.indexOf("&", psp);
-      if (pse < 0) pse = body.length();
-      pass = urlDecode(body.substring(psp, pse));
-    }
-
-    if (ssid.length() > 0 && ssid.length() < 33) {
-      client.print("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n");
-      client.print(CP_OK);
-      client.stop();
-      ssid.toCharArray(wifiSsid, 33);
-      pass.toCharArray(wifiPass, 65);
-      EEPROM.put(EEPROM_WIFI_FLAG_ADDR, (uint8_t)0xAB);
-      EEPROM.put(EEPROM_WIFI_SSID_ADDR, wifiSsid);
-      EEPROM.put(EEPROM_WIFI_PASS_ADDR, wifiPass);
-      EEPROM.commit();
-      USE_SERIAL.printf("AP: Saved SSID=%s — rebooting\n", wifiSsid);
-      delay(1500);
-      ESP.restart();
-    } else {
-      client.print("HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nInvalid SSID");
     }
   }
   else {
-    // Captive portal redirect: anything else → /
-    client.print("HTTP/1.1 302 Found\r\nLocation: /\r\nConnection: close\r\n\r\n");
+    client.print("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n" + String(CP_HTML));
   }
-
+  delay(100);
   client.stop();
 }
 
@@ -969,6 +933,8 @@ void setup() {
 void loop() {
   if (inAPMode) {
     handleCaptivePortal();
+    static unsigned long lastBlink = 0;
+    if (millis() - lastBlink > 5000) { USE_SERIAL.println("AP mode — accepting clients..."); lastBlink = millis(); }
     return;
   }
 
