@@ -303,6 +303,10 @@ export class DeviceHub extends DurableObject {
           const pingDeviceId = (msg.device_id as string) || "esp32-sensor";
           this.drainRelayQueue(pingDeviceId);
         }
+      } else if (meta?.role === "esp32" && msg.type === "wifi_list") {
+        this.broadcast(msg);
+      } else if (meta?.role === "esp32" && msg.type === "wifi_ack") {
+        this.broadcast(msg);
       } else if (meta?.role === "dashboard") {
         // Casey protocol compat: {type:"relay", device_id, relay1, relay2}
         if (msg.type === "relay") {
@@ -464,6 +468,15 @@ export class DeviceHub extends DurableObject {
         }));
       }
       console.log(`[DO] calibrate ${msg.params?.type} → ${this.esp32ws ? "forwarded" : "dropped (ESP32 offline)"}`);
+    } else if (msg.command) {
+      // Generic passthrough: forward any unknown command to ESP32 directly.
+      // Used by wifi_scan, wifi_set, and future commands.
+      if (this.esp32ws) {
+        this.esp32ws.send(JSON.stringify(msg));
+        console.log(`[DO] forwarded ${msg.command} → ESP32`);
+      } else {
+        console.log(`[DO] dropped ${msg.command} — ESP32 offline`);
+      }
     }
   }
 
