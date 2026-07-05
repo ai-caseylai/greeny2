@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { LayoutDashboard, Droplets, Cpu, Bell, Settings, X } from 'lucide-react'
+import { LayoutDashboard, Droplets, Cpu, Bell, Settings, X, Warehouse } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { AquaGreenLogo } from '../AquaGreenLogo'
 
@@ -10,6 +10,7 @@ export function Sidebar({ onNavClick }: { onNavClick?: () => void }) {
     { to: '/', icon: LayoutDashboard, label: t('sidebar.dashboard') },
     { to: '/water-quality', icon: Droplets, label: t('sidebar.sensors') },
     { to: '/device-control', icon: Cpu, label: t('sidebar.devices') },
+    { to: '/racks', icon: Warehouse, label: t('sidebar.racks', 'Racks') },
     { to: '/alerts', icon: Bell, label: t('sidebar.alerts') },
     { to: '/settings', icon: Settings, label: t('sidebar.settings') },
   ]

@@ -7,6 +7,8 @@ import WaterQualityPage from './pages/WaterQualityPage'
 import AlertsPage from './pages/AlertsPage'
 import DeviceControlPage from './pages/DeviceControlPage'
 import SettingsPage from './pages/SettingsPage'
+import RackManagementPage from './pages/racks/RackManagementPage'
+import RackDetailPage from './pages/racks/RackDetailPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   if (!getToken()) return <Navigate to="/login" replace />
@@ -35,6 +37,8 @@ export default function App() {
           <Route path="/device-control" element={<DeviceControlPage />} />
           <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/racks" element={<RackManagementPage />} />
+          <Route path="/racks/office/:officeId" element={<RackDetailPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
