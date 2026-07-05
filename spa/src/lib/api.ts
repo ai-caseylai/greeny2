@@ -1,4 +1,4 @@
-const API_BASE = ''  // Pages Functions (same domain)
+const API_BASE = 'https://iot-hub.funconnect.workers.dev'
 
 export function getToken(): string | null {
   return sessionStorage.getItem('token')
@@ -38,5 +38,19 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
     throw new Error(body.error || `HTTP ${res.status}`)
   }
 
+  return res.json()
+}
+
+// Management API — uses Pages Functions on same domain (for rack/crop/user management)
+export async function mgmtApiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const token = getToken()
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options.headers as Record<string, string>),
+  }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  const res = await fetch(path, { ...options, headers, cache: 'no-store' })
+  if (res.status === 401) { clearToken(); if (window.location.pathname !== '/login') window.location.href = '/login'; throw new Error('Unauthorized') }
+  if (!res.ok) { const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` })); throw new Error(body.error || `HTTP ${res.status}`) }
   return res.json()
 }

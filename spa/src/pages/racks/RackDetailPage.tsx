@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { useOffices } from '../../hooks/useOffices'
 import { useRacks, useRackVegetables, useRackEnvironment } from '../../hooks/useRacks'
 import { Plus, Edit2, Trash2, ArrowLeft, Thermometer, Droplets, Sun, Layers, Sprout, MessageCircle, Send, X } from 'lucide-react'
-import { apiFetch } from '../../lib/api'
+import { apiFetch, mgmtApiFetch } from '../../lib/api'
 import type { Rack } from '../../types'
 
 export default function RackDetailPage() {
@@ -324,7 +324,7 @@ function WhatsAppDialog({ rack, office, onClose }: {
     if (!phone || !message) return
     setSending(true)
     try {
-      await apiFetch('/api/workbuddy/send-whatsapp', {
+      await mgmtApiFetch('/api/workbuddy/send-whatsapp', {
         method: 'POST',
         body: JSON.stringify({ phone, message }),
       })

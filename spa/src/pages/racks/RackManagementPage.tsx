@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { useOffices } from '../../hooks/useOffices'
 import { useRacks } from '../../hooks/useRacks'
 import { Building2, Plus, Edit2, Trash2, ChevronRight, Warehouse, MessageCircle, Send, X } from 'lucide-react'
-import { apiFetch } from '../../lib/api'
+import { apiFetch, mgmtApiFetch } from '../../lib/api'
 import type { Office } from '../../types'
 
 export default function RackManagementPage() {
@@ -165,7 +165,7 @@ function WhatsAppDialog({ office, onClose }: { office: Office; onClose: () => vo
     if (!office.whatsapp_number || !message) return
     setSending(true)
     try {
-      await apiFetch('/api/workbuddy/send-whatsapp', {
+      await mgmtApiFetch('/api/workbuddy/send-whatsapp', {
         method: 'POST',
         body: JSON.stringify({ phone: office.whatsapp_number, message }),
       })

@@ -5,7 +5,7 @@ import { useOffice } from '../context/OfficeContext'
 import { useOffices } from '../hooks/useOffices'
 import { useRacks } from '../hooks/useRacks'
 import { useChineseText } from '../hooks/useChineseText'
-import { apiFetch } from '../lib/api'
+import { mgmtApiFetch } from '../lib/api'
 
 interface CropBatch {
   id: number
@@ -85,7 +85,7 @@ function AddBatchForm({ offices, racks, userRole, lockedOfficeId, onSaved }: {
       if (form.office_id) payload.office_id = Number(form.office_id)
       if (form.rack_id) payload.rack_id = Number(form.rack_id)
 
-      await apiFetch('/crop-batches', {
+      await mgmtApiFetch('/crop-batches', {
         method: 'POST',
         body: JSON.stringify(payload),
       })
@@ -172,7 +172,7 @@ function HarvestModal({ batch, onSaved, onClose }: {
     }
     setSaving(true)
     try {
-      await apiFetch('/harvests', {
+      await mgmtApiFetch('/harvests', {
         method: 'POST',
         body: JSON.stringify({
           batch_id: batch.id,
@@ -380,8 +380,8 @@ export default function CropManagementPage() {
       const harvestUrl = `/harvests${officeParam}`
 
       const [batchData, harvestData] = await Promise.all([
-        apiFetch<CropBatch[]>(batchUrl).catch(err => { console.error('crop-batches error:', err); return [] as CropBatch[] }),
-        apiFetch<HarvestLog[]>(harvestUrl).catch(err => { console.error('harvests error:', err); return [] as HarvestLog[] }),
+        mgmtApiFetch<CropBatch[]>(batchUrl).catch(err => { console.error('crop-batches error:', err); return [] as CropBatch[] }),
+        mgmtApiFetch<HarvestLog[]>(harvestUrl).catch(err => { console.error('harvests error:', err); return [] as HarvestLog[] }),
       ])
       setBatches(batchData)
       setHarvests(harvestData)
@@ -524,7 +524,7 @@ export default function CropManagementPage() {
                       {batch.status === 'growing' && days >= batch.expected_harvest_days * 0.8 && (
                         <button onClick={async () => {
                           try {
-                          await apiFetch(`/crop-batches/${batch.id}`, {
+                          await mgmtApiFetch(`/crop-batches/${batch.id}`, {
                             method: 'PATCH',
                             body: JSON.stringify({ status: 'ready' }),
                           })
@@ -538,7 +538,7 @@ export default function CropManagementPage() {
                       <button onClick={async () => {
                           if (!confirm(t('actions.confirmDelete'))) return
                           try {
-                          await apiFetch(`/crop-batches/${batch.id}`, { method: 'DELETE' })
+                          await mgmtApiFetch(`/crop-batches/${batch.id}`, { method: 'DELETE' })
                           } catch (err: any) { alert(t('messages.deleteFailed') + (err.message || '')) }
                           fetchData()
                         }}
