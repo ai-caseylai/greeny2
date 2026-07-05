@@ -40,6 +40,7 @@ export class DeviceHub extends DurableObject {
   private dashboards = new Map<WebSocket, Attachment>();
 
   private ledState = false;
+  private lastTelemetryMs = 0; // for bidirectional health check
   private tds = 0;
   private ec = 0;
   private ph = 7.0;
@@ -265,6 +266,7 @@ export class DeviceHub extends DurableObject {
         try { this.esp32ws.close(1000, "Replaced by new connection"); } catch {}
       }
       this.esp32ws = server;
+      this.lastTelemetryMs = 0; // reset health check
       console.log(`[DO] ESP32 connected: ${deviceId}`);
       server.send(JSON.stringify({
         type: "sync", led: this.ledState, doTs: Date.now(),
@@ -302,11 +304,11 @@ export class DeviceHub extends DurableObject {
           // Fix 4: drain relay queue on ping for lower latency
           const pingDeviceId = (msg.device_id as string) || "esp32-sensor";
           this.drainRelayQueue(pingDeviceId);
+        } else if (msg.type === "wifi_list") {
+          this.broadcast(msg);
+        } else if (msg.type === "wifi_ack") {
+          this.broadcast(msg);
         }
-      } else if (meta?.role === "esp32" && msg.type === "wifi_list") {
-        this.broadcast(msg);
-      } else if (meta?.role === "esp32" && msg.type === "wifi_ack") {
-        this.broadcast(msg);
       } else if (meta?.role === "dashboard") {
         // Casey protocol compat: {type:"relay", device_id, relay1, relay2}
         if (msg.type === "relay") {
@@ -327,6 +329,7 @@ export class DeviceHub extends DurableObject {
     const deviceId = msg.device_id || "esp32-sensor";
     const now = Date.now();
 
+    this.lastTelemetryMs = Date.now();
     this.tds = msg.tds as number;
     this.ec = msg.ec as number;
     this.ph = msg.ph as number;
@@ -527,6 +530,17 @@ export class DeviceHub extends DurableObject {
 
   async alarm() {
     console.log("[DO] alarm() firing");
+
+    // --- Bidirectional health check ---
+    // If ESP32 connected within last 30s but zero telemetry received,
+    // the outgoing WebSocket path is broken (common after deploys).
+    // Close it — ESP32 will reconnect fresh in both directions.
+    if (this.esp32ws && this.lastTelemetryMs === 0) {
+      console.log("[DO] health check FAILED — no telemetry since connect. Forcing reconnect.");
+      try { this.esp32ws.close(1000, "Health check failed — reconnect"); } catch {}
+      this.esp32ws = null;
+      this.broadcast({ type: "device_status", device_id: "esp32-sensor", status: "offline" });
+    }
 
     try {
       // --- Flush telemetry_buffer → D1 telemetry ---
