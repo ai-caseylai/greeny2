@@ -87,7 +87,7 @@ export default function SettingsPage() {
     if (wifiAck.success) {
       setSelectedSsid(null)
       setPassword('')
-      toast.addToast(`Connected to ${wifiAck.message}`, 'warning')
+      toast.addToast(`${t('settings.connected')} ${wifiAck.message}`, 'warning')
     } else {
       toast.addToast(`Connection failed: ${wifiAck.message}`, 'critical')
     }
@@ -110,7 +110,7 @@ export default function SettingsPage() {
       setConnecting(false)
       // wsConnected is the hook's live connection state — if it came back, device reconnected
       if (wsConnected) {
-        setWifiStatus({ success: true, message: `Connected to ${selectedSsid}` })
+        setWifiStatus({ success: true, message: `${t('settings.connected')} ${selectedSsid}` })
         setSelectedSsid(null)
         setPassword('')
         toast.addToast(`Reconnected — telemetry resumed`, 'warning')
@@ -151,7 +151,7 @@ export default function SettingsPage() {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* WiFi Configuration */}
-        <SettingsSection title="WiFi Configuration" icon={Wifi}>
+        <SettingsSection title={t('settings.wifiSettings')} icon={Wifi}>
           {/* Scan button */}
           <button
             onClick={handleScan}
@@ -163,7 +163,7 @@ export default function SettingsPage() {
             ) : (
               <Search className="h-4 w-4" />
             )}
-            {scanRequested ? t('settings.scanning') : 'Scan Networks'}
+            {scanRequested ? t('settings.scanning') : t('settings.scan')}
           </button>
           {!wsConnected && (
             <p className="text-[10px] text-amber-600 flex items-center gap-1"><WifiOff className="h-3 w-3" /> WebSocket disconnected — check System Info below</p>
@@ -173,7 +173,7 @@ export default function SettingsPage() {
           {scanRequested && (
             <div className="flex items-center gap-2 text-xs text-blue-600 bg-blue-50 rounded-lg px-3 py-2">
               <Wifi className="h-3.5 w-3.5 animate-pulse" />
-              Scanning nearby networks...
+              {t('settings.scanning')}
             </div>
           )}
 
@@ -219,7 +219,7 @@ export default function SettingsPage() {
           {!scanRequested && wifiNetworks.length === 0 && (
             <div className="flex items-center gap-2 text-xs text-gray-400 bg-gray-50 rounded-lg px-3 py-2">
               <Search className="h-3.5 w-3.5" />
-              No networks found. Click "Scan Networks" above to search for nearby WiFi.
+              {t('settings.noNetworks')}
             </div>
           )}
 
@@ -325,7 +325,7 @@ export default function SettingsPage() {
         </SettingsSection>
 
         {/* System Info */}
-        <SettingsSection title="System Info" icon={Info}>
+        <SettingsSection title={t('settings.systemInfo')} icon={Info}>
           <div className="space-y-3 text-sm">
             <div className="flex items-center justify-between">
               <span className="text-gray-500">{t('settings.system')}</span>
@@ -343,7 +343,7 @@ export default function SettingsPage() {
               <span className="text-gray-500">{t('settings.wsStatus')}</span>
               <span className={`flex items-center gap-1.5 ${wsConnected ? 'text-green-600' : 'text-red-500'}`}>
                 <span className={`h-2 w-2 rounded-full ${wsConnected ? 'bg-green-500' : 'bg-red-500'}`} />
-                {wsConnected ? 'Connected' : 'Disconnected'}
+                {wsConnected ? t('settings.connectedLabel') : t('settings.disconnected')}
               </span>
             </div>
           </div>
