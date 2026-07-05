@@ -91,6 +91,7 @@ function GaugeCard({ label, value, unit, icon: Icon, color, min, max, optimal }:
   label: string; value: number | null; unit: string; icon: React.ElementType
   color: string; min: number; max: number; optimal: [number, number]
 }) {
+  const { t } = useTranslation()
   const pct = value !== null ? Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100)) : 0
   const inRange = value !== null && value >= optimal[0] && value <= optimal[1]
   return (
@@ -109,7 +110,7 @@ function GaugeCard({ label, value, unit, icon: Icon, color, min, max, optimal }:
       </div>
       <div className="mt-1 flex justify-between text-[9px] text-gray-400">
         <span>{min}</span>
-        <span className={inRange ? 'text-green-600' : 'text-amber-600 font-medium'}>{inRange ? 'Normal' : '⚠ Abnormal'}</span>
+        <span className={inRange ? 'text-green-600' : 'text-amber-600 font-medium'}>{inRange ? t('waterQuality.normal') : t('waterQuality.abnormal')}</span>
         <span>{max}</span>
       </div>
     </div>
@@ -120,7 +121,7 @@ const METRICS = [
   { key: 'pH', label: 'pH', color: '#2196F3', unit: '' },
   { key: 'TDS', label: 'TDS', color: '#FF9800', unit: 'ppm' },
   { key: 'EC', label: 'EC', color: '#4CAF50', unit: 'µS/cm' },
-  { key: 'Temp', label: 'Temp', color: '#E91E63', unit: '°C' },
+  { key: 'Temp', label: '°C', color: '#E91E63', unit: '°C' },
 ]
 
 export default function WaterQualityPage() {
@@ -288,8 +289,8 @@ export default function WaterQualityPage() {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-border bg-gray-50 text-left text-gray-500">
-                    <th className="px-4 py-2">pH</th><th className="px-4 py-2">EC</th><th className="px-4 py-2">TDS</th>
-                    <th className="px-4 py-2">°C</th><th className="px-4 py-2">LED</th><th className="px-4 py-2">Time</th>
+                    <th className="px-4 py-2">{t('waterQuality.ph')}</th><th className="px-4 py-2">{t('waterQuality.ec')}</th><th className="px-4 py-2">{t('waterQuality.tds')}</th>
+                    <th className="px-4 py-2">°C</th><th className="px-4 py-2">{t('waterQuality.led')}</th><th className="px-4 py-2">{t('waterQuality.time')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -299,7 +300,7 @@ export default function WaterQualityPage() {
                       <td className="px-4 py-2">{r.ec?.toFixed(1)}</td>
                       <td className="px-4 py-2">{r.tds != null ? Math.round(r.tds) : (r.ec != null ? Math.round(r.ec) : '-')}</td>
                       <td className="px-4 py-2">{r.water_temp?.toFixed(1)}</td>
-                      <td className="px-4 py-2">{r.led != null ? (r.led ? 'ON' : 'OFF') : '-'}</td>
+                      <td className="px-4 py-2">{r.led != null ? (r.led ? t('waterQuality.on') : t('waterQuality.off')) : '-'}</td>
                       <td className="px-4 py-2 text-gray-400">{formatTime(r.created_at)}</td>
                     </tr>
                   ))}

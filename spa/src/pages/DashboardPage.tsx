@@ -205,11 +205,11 @@ export default function DashboardPage() {
   const esp32Uptime = latestTelemetry?.ts_ms ? Math.floor(latestTelemetry.ts_ms / 1000) : null
 
   const kpiCards = [
-    { label: 'Online Devices', valueStr: `${onlineCount}/${totalDevices}`, valueNum: null, icon: Cpu, color: '#4CAF50', unit: '' },
-    { label: 'pH Level', valueStr: latestTelemetry?.ph != null ? latestTelemetry.ph.toFixed(2) : '-', valueNum: latestTelemetry?.ph ?? null, icon: Droplets, color: '#2196F3', unit: '' },
-    { label: 'Temperature', valueStr: latestTelemetry?.water_temp != null ? `${latestTelemetry.water_temp.toFixed(1)}°C` : '-', valueNum: latestTelemetry?.water_temp ?? null, icon: Thermometer, color: '#E91E63', unit: '°C' },
-    { label: 'TDS', valueStr: latestTelemetry?.tds != null ? `${Math.round(latestTelemetry.tds)} ppm` : (latestTelemetry?.ec != null ? `${Math.round(latestTelemetry.ec)} ppm` : '-'), valueNum: latestTelemetry?.tds ?? latestTelemetry?.ec ?? null, icon: Zap, color: '#FF9800', unit: 'ppm' },
-    { label: 'EC', valueStr: latestTelemetry?.ec != null ? `${latestTelemetry.ec.toFixed(1)} µS/cm` : '-', valueNum: latestTelemetry?.ec ?? null, icon: TrendingUp, color: '#4CAF50', unit: 'µS/cm' },
+    { label: t('dashboard.onlineDevices'), valueStr: `${onlineCount}/${totalDevices}`, valueNum: null, icon: Cpu, color: '#4CAF50', unit: '' },
+    { label: t('dashboard.avgPh'), valueStr: latestTelemetry?.ph != null ? latestTelemetry.ph.toFixed(2) : '-', valueNum: latestTelemetry?.ph ?? null, icon: Droplets, color: '#2196F3', unit: '' },
+    { label: t('dashboard.avgTemp'), valueStr: latestTelemetry?.water_temp != null ? `${latestTelemetry.water_temp.toFixed(1)}°C` : '-', valueNum: latestTelemetry?.water_temp ?? null, icon: Thermometer, color: '#E91E63', unit: '°C' },
+    { label: t('dashboard.tds'), valueStr: latestTelemetry?.tds != null ? `${Math.round(latestTelemetry.tds)} ppm` : (latestTelemetry?.ec != null ? `${Math.round(latestTelemetry.ec)} ppm` : '-'), valueNum: latestTelemetry?.tds ?? latestTelemetry?.ec ?? null, icon: Zap, color: '#FF9800', unit: 'ppm' },
+    { label: t('dashboard.ec'), valueStr: latestTelemetry?.ec != null ? `${latestTelemetry.ec.toFixed(1)} µS/cm` : '-', valueNum: latestTelemetry?.ec ?? null, icon: TrendingUp, color: '#4CAF50', unit: 'µS/cm' },
   ]
 
   const sparkData = useMemo(() => {
@@ -224,8 +224,8 @@ export default function DashboardPage() {
   }, [telemetry])
 
   const statusLabels: Record<string, string> = {
-    online: 'Online', offline: 'Offline', warning: 'Warning',
-    alarm: 'Alarm', maintenance: 'Maintenance',
+    online: t('status.online'), offline: t('status.offline'), warning: t('status.warning'),
+    alarm: t('status.alarm'), maintenance: t('status.maintenance'),
   }
   const statusColors: Record<string, string> = {
     online: 'bg-green-500', offline: 'bg-gray-400', warning: 'bg-amber-500',
@@ -251,7 +251,7 @@ export default function DashboardPage() {
       <div className="flex items-center gap-3 px-3 py-1.5 rounded-lg bg-gray-50 border border-gray-100 text-[10px] text-gray-500">
         <span className={`inline-flex items-center gap-1 ${wsConnected ? 'text-green-600' : 'text-red-500'}`}>
           <span className={`h-1.5 w-1.5 rounded-full ${wsConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-          {wsConnected ? 'Live' : 'Polling'}
+          {wsConnected ? t('deviceControl.live') : t('deviceControl.polling')}
         </span>
         <span className="text-gray-300">·</span>
         <span>{firstDeviceId || '—'}</span>
@@ -305,7 +305,7 @@ export default function DashboardPage() {
         <div className="rounded-xl border border-border bg-white p-4 shadow-sm">
           <div className="flex items-center gap-2 mb-2">
             <Droplets className="h-3.5 w-3.5" style={{ color: '#2196F3' }} />
-            <h3 className="text-xs font-semibold text-gray-700">pH</h3>
+            <h3 className="text-xs font-semibold text-gray-700">{t('dashboard.ph')}</h3>
             <span className="text-[10px] text-gray-400">{sparkData.filter((d: any) => d.pH != null).length} pts</span>
           </div>
           <Sparkline data={sparkData} dataKey="pH" color="#2196F3" />
@@ -313,7 +313,7 @@ export default function DashboardPage() {
         <div className="rounded-xl border border-border bg-white p-4 shadow-sm">
           <div className="flex items-center gap-2 mb-2">
             <Thermometer className="h-3.5 w-3.5" style={{ color: '#E91E63' }} />
-            <h3 className="text-xs font-semibold text-gray-700">Temperature</h3>
+            <h3 className="text-xs font-semibold text-gray-700">{t('dashboard.temperature')}</h3>
             <span className="text-[10px] text-gray-400">{sparkData.filter((d: any) => d.Temp != null).length} pts</span>
           </div>
           <Sparkline data={sparkData} dataKey="Temp" color="#E91E63" />
@@ -321,7 +321,7 @@ export default function DashboardPage() {
         <div className="rounded-xl border border-border bg-white p-4 shadow-sm">
           <div className="flex items-center gap-2 mb-2">
             <Zap className="h-3.5 w-3.5" style={{ color: '#FF9800' }} />
-            <h3 className="text-xs font-semibold text-gray-700">TDS</h3>
+            <h3 className="text-xs font-semibold text-gray-700">{t('dashboard.tds')}</h3>
             <span className="text-[10px] text-gray-400">{sparkData.filter((d: any) => d.TDS != null).length} pts</span>
           </div>
           <Sparkline data={sparkData} dataKey="TDS" color="#FF9800" />
@@ -329,7 +329,7 @@ export default function DashboardPage() {
         <div className="rounded-xl border border-border bg-white p-4 shadow-sm">
           <div className="flex items-center gap-2 mb-2">
             <Zap className="h-3.5 w-3.5" style={{ color: '#4CAF50' }} />
-            <h3 className="text-xs font-semibold text-gray-700">EC</h3>
+            <h3 className="text-xs font-semibold text-gray-700">{t('dashboard.ec')}</h3>
             <span className="text-[10px] text-gray-400">{sparkData.filter((d: any) => d.EC != null).length} pts</span>
           </div>
           <Sparkline data={sparkData} dataKey="EC" color="#4CAF50" />
@@ -338,15 +338,15 @@ export default function DashboardPage() {
 
       {/* Device Table */}
       <div className="rounded-xl border border-border bg-white shadow-sm overflow-hidden">
-        <div className="px-5 py-4 border-b border-border"><h3 className="text-sm font-semibold text-gray-700">Devices</h3></div>
+        <div className="px-5 py-4 border-b border-border"><h3 className="text-sm font-semibold text-gray-700">{t('sidebar.devices')}</h3></div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-gray-50 text-left text-gray-500">
-                <th className="px-4 py-3">Device ID</th><th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">pH</th><th className="px-4 py-3">Temp</th>
-                <th className="px-4 py-3">TDS</th><th className="px-4 py-3">EC</th>
-                <th className="px-4 py-3">Status</th><th className="px-4 py-3">Last Seen</th>
+                <th className="px-4 py-3">{t('dashboard.deviceId')}</th><th className="px-4 py-3">{t('dashboard.name')}</th>
+                <th className="px-4 py-3">{t('dashboard.ph')}</th><th className="px-4 py-3">Temp</th>
+                <th className="px-4 py-3">{t('dashboard.tds')}</th><th className="px-4 py-3">{t('dashboard.ec')}</th>
+                <th className="px-4 py-3">{t('dashboard.status')}</th><th className="px-4 py-3">{t('dashboard.lastSeen')}</th>
               </tr>
             </thead>
             <tbody>

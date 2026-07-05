@@ -74,7 +74,7 @@ export default function SettingsPage() {
   useEffect(() => {
     if (wifiNetworks.length > 0) {
       setScanRequested(false)
-      toast.addToast(`Found ${wifiNetworks.length} network${wifiNetworks.length === 1 ? '' : 's'}`, 'warning')
+      toast.addToast(t('settings.foundNetworks', { count: wifiNetworks.length }), 'warning')
     }
   }, [wifiNetworks])
 
@@ -116,7 +116,7 @@ export default function SettingsPage() {
         toast.addToast(`Reconnected — telemetry resumed`, 'warning')
       } else {
         setWifiStatus({ success: false, message: 'Device did not reconnect. Check credentials or signal.' })
-        toast.addToast('WiFi switch failed — device offline', 'critical')
+        toast.addToast(t('settings.wifiSwitchFailed'), 'critical')
       }
     }, 20000)
   }
@@ -124,7 +124,7 @@ export default function SettingsPage() {
   const cancelConnect = () => {
     clearTimeout(connectTimeoutRef.current)
     setConnecting(false)
-    setWifiStatus({ success: false, message: 'Cancelled' })
+    setWifiStatus({ success: false, message: t('settings.cancelled') })
   }
 
   const handleSaveThresholds = async () => {
@@ -147,7 +147,7 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-xl font-bold text-gray-900">Settings</h2>
+      <h2 className="text-xl font-bold text-gray-900">{t('settings.title')}</h2>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* WiFi Configuration */}
@@ -163,7 +163,7 @@ export default function SettingsPage() {
             ) : (
               <Search className="h-4 w-4" />
             )}
-            {scanRequested ? 'Scanning...' : 'Scan Networks'}
+            {scanRequested ? t('settings.scanning') : 'Scan Networks'}
           </button>
           {!wsConnected && (
             <p className="text-[10px] text-amber-600 flex items-center gap-1"><WifiOff className="h-3 w-3" /> WebSocket disconnected — check System Info below</p>
@@ -249,7 +249,7 @@ export default function SettingsPage() {
                   ) : (
                     <Wifi className="h-4 w-4" />
                   )}
-                  {connecting ? 'Connecting...' : 'Connect'}
+                  {connecting ? t('settings.connecting') : t('settings.connect')}
                 </button>
                 {connecting && (
                   <button
@@ -278,7 +278,7 @@ export default function SettingsPage() {
         <SettingsSection title="Maintenance" icon={Wrench}>
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-sm text-gray-600">pH Range</span>
+              <span className="text-sm text-gray-600">{t('settings.phRange')}</span>
               <div className="flex items-center gap-2">
                 <input value={thresholds.phMin} onChange={e => updateThreshold('phMin', e.target.value)}
                   className="w-16 rounded-lg border border-border px-2 py-1 text-sm text-center outline-none focus:border-[#00a65a]" />
@@ -288,12 +288,12 @@ export default function SettingsPage() {
               </div>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-sm text-gray-600">EC Max</span>
+              <span className="text-sm text-gray-600">{t('settings.ecMax')}</span>
               <input value={thresholds.ecMax} onChange={e => updateThreshold('ecMax', e.target.value)}
                 className="w-20 rounded-lg border border-border px-2 py-1 text-sm text-center outline-none focus:border-[#00a65a]" />
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-sm text-gray-600">Temp Range</span>
+              <span className="text-sm text-gray-600">{t('settings.tempRange')}</span>
               <div className="flex items-center gap-2">
                 <input value={thresholds.tempMin} onChange={e => updateThreshold('tempMin', e.target.value)}
                   className="w-16 rounded-lg border border-border px-2 py-1 text-sm text-center outline-none focus:border-[#00a65a]" />
@@ -318,7 +318,7 @@ export default function SettingsPage() {
               ) : saved ? (
                 <><CheckCircle className="h-3.5 w-3.5" /> Saved!</>
               ) : (
-                'Save'
+                t('settings.save')
               )}
             </button>
           </div>
@@ -328,19 +328,19 @@ export default function SettingsPage() {
         <SettingsSection title="System Info" icon={Info}>
           <div className="space-y-3 text-sm">
             <div className="flex items-center justify-between">
-              <span className="text-gray-500">System</span>
+              <span className="text-gray-500">{t('settings.system')}</span>
               <span className="text-gray-700 font-medium">Greeny Alpha</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-gray-500">Version</span>
+              <span className="text-gray-500">{t('settings.version')}</span>
               <span className="text-gray-700">v1.0.0</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-gray-500">Device</span>
+              <span className="text-gray-500">{t('settings.device')}</span>
               <span className="text-gray-700">esp32-sensor</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-gray-500">WS Status</span>
+              <span className="text-gray-500">{t('settings.wsStatus')}</span>
               <span className={`flex items-center gap-1.5 ${wsConnected ? 'text-green-600' : 'text-red-500'}`}>
                 <span className={`h-2 w-2 rounded-full ${wsConnected ? 'bg-green-500' : 'bg-red-500'}`} />
                 {wsConnected ? 'Connected' : 'Disconnected'}
