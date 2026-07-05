@@ -7,6 +7,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiMulti.h>
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 #include <OneWire.h>
@@ -46,36 +47,21 @@ const char* WS_PATH       = "/device/esp32-sensor";
 #define EEPROM_PH7_ADDR         24    // pH 7.0 reference voltage
 #define EEPROM_PH_SLOPE_ADDR    28    // pH slope (V/pH), default 0.059
 #define EEPROM_CAL_V4_ADDR      32    // temp: voltage at pH 4.00 (for 2-pt cal)
-#define EEPROM_WIFI_FLAG_ADDR   40    // 0xAB = custom WiFi stored
-#define EEPROM_WIFI_SSID_ADDR   41    // 33 bytes SSID
-#define EEPROM_WIFI_PASS_ADDR   74    // 65 bytes password
 // ─────────────────────────────────────────────────
 
+WiFiMulti wifiMulti;
 WebSocketsClient webSocket;
 OneWire oneWire(ONEWIRE_PIN);
 DallasTemperature ds18b20(&oneWire);
 Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
 
 unsigned long lastPingMs = 0;
-unsigned long lastInboundMs = 0;    // watchdog: last time DO sent us anything
 uint32_t pingSeq = 0;
 bool timeSynced = false;
 float tdsKValue = 0.094;   // inverted board: 200/2126 ratio from tap water
 float ecOffset = 2275.0;     // EC zero-point — calibrated for inverted board in distilled
 float ph7Voltage = 1.65;  // voltage at pH 7.0, loaded from EEPROM (default: 3.3/2)
 float phSlope = 0.059;    // pH slope in V/pH, loaded from EEPROM (default: 0.059)
-
-// ── WiFi credential storage ──────────────────────
-char wifiSsid[33] = "";
-char wifiPass[65] = "";
-bool wifiProvisioned = false;
-bool wifiReconnecting = false;
-char wifiOldSsid[33] = "";
-char wifiOldPass[65] = "";
-unsigned long wifiReconnectStart = 0;
-bool wifiPendingAck = false;
-char wifiPendingAckJson[128] = "";
-#define WIFI_RECONNECT_TIMEOUT_MS 15000
 
 // ── NTP time sync ───────────────────────────────
 void syncTime() {
@@ -181,79 +167,6 @@ void oledUpdate(float ph, float ec, float tds, float temp, bool led,
                  uptimeSec / 3600, (uptimeSec % 3600) / 60, uptimeSec % 60);
 
   display.display();
-}
-
-// ── WiFi credential helpers ─────────────────────-
-void loadWiFiCredentials() {
-  uint8_t flag;
-  EEPROM.get(EEPROM_WIFI_FLAG_ADDR, flag);
-  wifiProvisioned = (flag == 0xAB);
-  if (wifiProvisioned) {
-    EEPROM.get(EEPROM_WIFI_SSID_ADDR, wifiSsid);
-    EEPROM.get(EEPROM_WIFI_PASS_ADDR, wifiPass);
-    // Validate
-    if (wifiSsid[0] == '\0' || strlen(wifiSsid) > 32 || wifiSsid[0] == (char)0xFF) {
-      wifiProvisioned = false;
-    }
-  }
-  if (wifiProvisioned) {
-    USE_SERIAL.printf("WiFi: Using EEPROM credentials: %s\n", wifiSsid);
-  } else {
-    strcpy(wifiSsid, WIFI_SSID);
-    strcpy(wifiPass, WIFI_PASS);
-    USE_SERIAL.printf("WiFi: Using compiled defaults: %s\n", wifiSsid);
-  }
-}
-
-void saveWiFiCredentials(const char* ssid, const char* pass) {
-  strncpy(wifiSsid, ssid, 32); wifiSsid[32] = '\0';
-  strncpy(wifiPass, pass, 64); wifiPass[64] = '\0';
-  wifiProvisioned = true;
-  uint8_t flag = 0xAB;
-  EEPROM.put(EEPROM_WIFI_FLAG_ADDR, flag);
-  EEPROM.put(EEPROM_WIFI_SSID_ADDR, wifiSsid);
-  EEPROM.put(EEPROM_WIFI_PASS_ADDR, wifiPass);
-  EEPROM.commit();
-  USE_SERIAL.printf("WiFi: Saved credentials: %s\n", wifiSsid);
-}
-
-// ── WiFi event handler (non-blocking) ────────────
-void wifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
-  switch (event) {
-    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
-      USE_SERIAL.printf("WiFi: Got IP = %s\n", WiFi.localIP().toString().c_str());
-      wifiReconnecting = false;
-      break;
-    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
-      uint8_t reason = info.wifi_sta_disconnected.reason;
-      USE_SERIAL.printf("WiFi: Disconnected (reason=%d)\n", reason);
-      if (wifiReconnecting) {
-        // wifi_set is in progress — don't auto-reconnect, let wifi_set handle it
-      } else {
-        USE_SERIAL.println("WiFi: Auto-reconnecting...");
-        WiFi.begin(wifiSsid, wifiPass);
-      }
-      break;
-    }
-    default: break;
-  }
-}
-
-void wifiConnectBlocking() {
-  WiFi.onEvent(wifiEvent);
-  WiFi.begin(wifiSsid, wifiPass);
-  USE_SERIAL.printf("WiFi: Connecting to %s...\n", wifiSsid);
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 30000) {
-    delay(500);
-    USE_SERIAL.print(".");
-  }
-  if (WiFi.status() == WL_CONNECTED) {
-    USE_SERIAL.println();
-    USE_SERIAL.printf("WiFi: Connected. IP = %s\n", WiFi.localIP().toString().c_str());
-  } else {
-    USE_SERIAL.println("\nWiFi: FAILED to connect");
-  }
 }
 
 // ── EEPROM helpers ──────────────────────────────
@@ -446,16 +359,9 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       setLED(true);
       pingSeq = 1;
       lastPingMs = millis();
-      // Flush any pending wifi_ack
-      if (wifiPendingAck) {
-        wifiPendingAck = false;
-        webSocket.sendTXT(wifiPendingAckJson);
-        USE_SERIAL.printf("WIFI_ACK → %s\n", wifiPendingAckJson);
-      }
       break;
 
     case WStype_TEXT: {
-      lastInboundMs = millis();  // watchdog: DO→ESP32 path is alive
       USE_SERIAL.printf("MSG  ← %s\n", (char*)payload);
       JsonDocument doc;
       DeserializationError err = deserializeJson(doc, (char*)payload);
@@ -485,55 +391,6 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
           char buf[128];
           serializeJson(ack, buf);
           webSocket.sendTXT(buf);
-        }
-        else if (command && strcmp(command, "wifi_scan") == 0) {
-          USE_SERIAL.println("CMD  ← wifi_scan");
-          // DO passthrough format: {"command":"wifi_scan","device_id":"...","params":{...},"ts":...}
-          // params.action optionally "async" to return immediately
-          int n = WiFi.scanNetworks(false, true);
-          JsonDocument list;
-          list["type"] = "wifi_list";
-          list["device_id"] = "esp32-sensor";
-          JsonArray nets = list["networks"].to<JsonArray>();
-          for (int i = 0; i < n && i < 20; i++) {
-            JsonObject net = nets.add<JsonObject>();
-            net["ssid"] = WiFi.SSID(i);
-            net["rssi"] = WiFi.RSSI(i);
-            net["enc"]  = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
-          }
-          WiFi.scanDelete();
-          char buf[1024];
-          serializeJson(list, buf);
-          webSocket.sendTXT(buf);
-          USE_SERIAL.printf("WIFI_SCAN: found %d networks, sent wifi_list\n", n);
-        }
-        else if (command && strcmp(command, "wifi_set") == 0) {
-          const char* newSsid = doc["params"]["ssid"];
-          const char* newPass = doc["params"]["pass"];
-          USE_SERIAL.printf("CMD  ← wifi_set: %s\n", newSsid ? newSsid : "(null)");
-          if (!newSsid || !newPass || strlen(newSsid) == 0) {
-            JsonDocument ack;
-            ack["type"] = "wifi_ack";
-            ack["command"] = "wifi_set";
-            ack["status"] = "error";
-            ack["msg"] = "Missing ssid or pass";
-            char buf[128];
-            serializeJson(ack, buf);
-            webSocket.sendTXT(buf);
-          } else {
-            // Save old credentials as fallback
-            strncpy(wifiOldSsid, wifiSsid, 32);
-            strncpy(wifiOldPass, wifiPass, 64);
-            // Store and try new credentials
-            saveWiFiCredentials(newSsid, newPass);
-            USE_SERIAL.printf("WiFi: Switching to %s...\n", newSsid);
-            wifiReconnecting = true;
-            wifiReconnectStart = millis();
-            WiFi.disconnect(true);
-            delay(200);
-            WiFi.begin(newSsid, newPass);
-            // Non-blocking: result handled in loop()
-          }
         }
         else if (command && strcmp(command, "calibrate") == 0) {
           const char* calType = doc["params"]["type"];
@@ -782,9 +639,15 @@ void setup() {
   USE_SERIAL.println("=== IoT Hub — Sensor Hub ===");
   USE_SERIAL.println();
 
-  // Wi-Fi — load credentials from EEPROM or use compiled defaults
-  loadWiFiCredentials();
-  wifiConnectBlocking();
+  // Wi-Fi
+  wifiMulti.addAP(WIFI_SSID, WIFI_PASS);
+  USE_SERIAL.printf("WiFi: Connecting to %s...\n", WIFI_SSID);
+  while (wifiMulti.run() != WL_CONNECTED) {
+    delay(500);
+    USE_SERIAL.print(".");
+  }
+  USE_SERIAL.println();
+  USE_SERIAL.printf("WiFi: Connected. IP = %s\n", WiFi.localIP().toString().c_str());
 
   // NTP
   syncTime();
@@ -805,56 +668,8 @@ void loop() {
   webSocket.loop();
   handleSerialCalibration();
 
-  // ── wifi_set result monitoring (non-blocking) ──
-  if (wifiReconnecting) {
-    if (WiFi.status() == WL_CONNECTED) {
-      wifiReconnecting = false;
-      String newIp = WiFi.localIP().toString();
-      USE_SERIAL.printf("WiFi: Reconnected! IP = %s\n", newIp.c_str());
-      JsonDocument ack;
-      ack["type"] = "wifi_ack";
-      ack["command"] = "wifi_set";
-      ack["status"] = "ok";
-      ack["ip"] = newIp;
-      serializeJson(ack, wifiPendingAckJson);
-      wifiPendingAck = true;
-    } else if (millis() - wifiReconnectStart > WIFI_RECONNECT_TIMEOUT_MS) {
-      wifiReconnecting = false;
-      USE_SERIAL.println("WiFi: New network FAILED — falling back to previous");
-      if (wifiOldSsid[0] != '\0') {
-        saveWiFiCredentials(wifiOldSsid, wifiOldPass);
-        WiFi.disconnect(true);
-        delay(200);
-        WiFi.begin(wifiOldSsid, wifiOldPass);
-      } else {
-        strcpy(wifiSsid, WIFI_SSID);
-        strcpy(wifiPass, WIFI_PASS);
-        WiFi.disconnect(true);
-        delay(200);
-        WiFi.begin(WIFI_SSID, WIFI_PASS);
-      }
-      JsonDocument ack;
-      ack["type"] = "wifi_ack";
-      ack["command"] = "wifi_set";
-      ack["status"] = "error";
-      ack["msg"] = "Connection failed, reverted to previous network";
-      serializeJson(ack, wifiPendingAckJson);
-      wifiPendingAck = true;
-    }
-  }
-
   if (timeSynced && webSocket.isConnected()) {
     unsigned long now = millis();
-
-    // Watchdog: if DO→ESP32 path is broken (half-open after deploy),
-    // we sent telemetry but received nothing back for 30s. Force reconnect.
-    if (lastInboundMs > 0 && now - lastInboundMs > 30000) {
-      USE_SERIAL.println("[WD] No inbound data for 30s — forcing reconnect");
-      webSocket.disconnect();
-      lastInboundMs = 0;
-      return;
-    }
-
     if (now - lastPingMs >= PING_INTERVAL_MS) {
       sendTelemetry();
       lastPingMs = now;
