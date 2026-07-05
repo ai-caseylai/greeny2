@@ -3,4 +3,5 @@ node_modules/
 *.log
 toggle-log.jsonl
 *.png
+wifi.env
 build_output/

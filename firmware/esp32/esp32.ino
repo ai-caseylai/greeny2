@@ -17,8 +17,8 @@
 #include <Adafruit_SSD1306.h>
 
 // ── CONFIG ──────────────────────────────────────
-const char* WIFI_SSID     = "Redmi 15 5G";
-const char* WIFI_PASS     = "alpha102938A!";
+const char* WIFI_SSID     = "YOUR_SSID";
+const char* WIFI_PASS     = "YOUR_PASSWORD";
 
 const char* WS_HOST       = "iot-hub.funconnect.workers.dev";
 const uint16_t WS_PORT    = 443;

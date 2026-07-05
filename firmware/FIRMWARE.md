@@ -24,8 +24,7 @@
 - Used for LED-only smoke testing. Fully superseded by current unified firmware.
 
 ### WiFi
-- **Primary:** `MyWiFi` / `my-password` (2.4GHz, working)
-- **Phone hotspot:** `Redmi 15 5G` / `alpha102938A!` (ESP32 couldn't connect — likely 5GHz/WiFi 6)
+- **WiFi:** Credentials in `wifi.env` (not committed). ESP32 supports 2.4GHz only.
 
 ---
 

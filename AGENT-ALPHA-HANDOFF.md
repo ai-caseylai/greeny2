@@ -40,7 +40,7 @@ The user is technically sophisticated (understands ESP32 hardware, Cloudflare ar
 - **"Comprehensive handoff"** — the user expects successors to pick up seamlessly. This document is their idea.
 - **Pragmatic about calibration** — asked if bottled water could substitute for distilled (it can't), experimented with it anyway, accepted the failure, moved on. Not dogmatic.
 
-The user is in Chengdu, Sichuan, China. Tap water is ~100-250 μS/cm (estimate, unverified). The phone hotspot is `Redmi 15 5G` / `alpha102938A!` (ESP32 couldn't connect — likely 5GHz). Home WiFi `MyWiFi` / `my-password` works at 2.4GHz.
+The user is in Chengdu, Sichuan, China. Tap water is ~100-250 μS/cm (estimate, unverified). Home WiFi and phone hotspot credentials are in `wifi.env` (not committed).
 - **Agent:** Agent Alpha
 - **Role:** Higher-level architectural view, prototype smoke-testing, future AI agent coordination
 - **Cloudflare API Token (FunConnect):** Active, all permissions (Workers Edit, D1 Edit, KV Edit, R2 Edit, Routes Edit, DNS Edit, Analytics Read)
@@ -83,7 +83,7 @@ No MQTT. No EMQX. WebSocket + DO Hibernation is the universal protocol.
   - pH probe with amplifier board (on GPIO 39 — ADC1) — **POSSIBLY DISCONNECTED** (reads 34.95 = 3.3V = floating)
   - DS18B20 waterproof temp probe (OneWire on GPIO 13) — **WORKING** (addr `281C6543D45E6759`)
   - WS-001 display (not used in current sketch — screen stays dark)
-- **WiFi:** Currently `MyWiFi` / `my-password` (2.4GHz). User wants `Redmi 15 5G` / `alpha102938A!` but ESP32 couldn't connect to phone hotspot (likely 5GHz or WiFi 6).
+- **WiFi:** Default credentials in `wifi.env` (not committed). ESP32 supports 2.4GHz only.
 - **Sketch:** `C:\Projects\Prototype\esp32-sketch-sensor\esp32-sketch-sensor.ino`
 
 ## Sensor Details

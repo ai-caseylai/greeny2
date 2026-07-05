@@ -97,7 +97,7 @@ The DO hibernates between telemetry messages. `webSocketMessage()` contains zero
 - **USB:** CH340 on COM3, 115200 baud
 - **Sketch:** `firmware/esp32/esp32.ino` — unified (was two separate sketches, consolidated)
 - **Pins:** LED=GPIO 2, DS18B20=GPIO 13, TDS=GPIO 35, pH=GPIO 39, OLED=GPIO 21/22
-- **WiFi:** MyWiFi / my-password (2.4GHz)
+- **WiFi:** 2.4GHz — credentials in `wifi.env` (not committed)
 
 ### ESP32 #1 — LED Controller (Not connected)
 - **Chip:** ESP32-D0WD-V3 rev v3.0, MAC `c0:49:ef:b4:79:6c`, 16MB flash
