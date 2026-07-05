@@ -24,7 +24,13 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     });
   }
 
-  const payload = await verify(token, context.env.JWT_SECRET);
+  // Read JWT secret from D1 (same source as Worker)
+  const row = await context.env.DB.prepare(
+    "SELECT value FROM settings WHERE key = 'jwt_secret'"
+  ).first<{ value: string }>();
+  const jwtSecret = row?.value || context.env.JWT_SECRET || '';
+  
+  const payload = await verify(token, jwtSecret);
   if (!payload) {
     return new Response(JSON.stringify({ error: 'Invalid or expired token' }), {
       status: 401, headers: { 'Content-Type': 'application/json' }
