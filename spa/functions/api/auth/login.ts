@@ -1,4 +1,4 @@
-import { sign } from '../../_lib/jwt';
+import { sign, getJwtSecret } from '../../_lib/jwt';
 import { verify as verifyPassword } from '../../_lib/password';
 import type { Env } from '../../_lib/types';
 
@@ -27,13 +27,18 @@ export const onRequest: PagesFunction<Env>[] = [
       return new Response(JSON.stringify({ error: 'Invalid credentials' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
     }
 
+    const secret = await getJwtSecret(c.env);
+    if (!secret) {
+      return new Response(JSON.stringify({ error: 'Server misconfigured: jwt_secret missing from D1 settings' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    }
+
     const token = await sign({
       sub: user.id,
       username: user.username,
       role: user.role as any,
       office_id: user.office_id,
       display_name: user.display_name,
-    }, c.env.JWT_SECRET);
+    }, secret);
 
     return new Response(JSON.stringify({
       token,

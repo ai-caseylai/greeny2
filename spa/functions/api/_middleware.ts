@@ -1,4 +1,4 @@
-import { verify, extractBearerToken } from '../_lib/jwt';
+import { verify, extractBearerToken, getJwtSecret } from '../_lib/jwt';
 import type { Env, JwtPayload } from '../_lib/types';
 
 declare global {
@@ -24,12 +24,14 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     });
   }
 
-  // Read JWT secret from D1 (same source as Worker)
-  const row = await context.env.DB.prepare(
-    "SELECT value FROM settings WHERE key = 'jwt_secret'"
-  ).first<{ value: string }>();
-  const jwtSecret = row?.value || context.env.JWT_SECRET || '';
-  
+  // Read JWT secret from D1 (same source as Worker). No fallback to a default.
+  const jwtSecret = await getJwtSecret(context.env);
+  if (!jwtSecret) {
+    return new Response(JSON.stringify({ error: 'Server misconfigured: jwt_secret missing from D1 settings' }), {
+      status: 500, headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
   const payload = await verify(token, jwtSecret);
   if (!payload) {
     return new Response(JSON.stringify({ error: 'Invalid or expired token' }), {

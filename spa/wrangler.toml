@@ -9,7 +9,8 @@ database_id = "7191a23e-c43b-4962-b3fb-96818ac2d07c"
 
 [vars]
 API_KEY = ""
-JWT_SECRET = "greeny-jwt-secret-change-in-prod"
+# JWT_SECRET intentionally removed: the JWT signing secret is read from the D1
+# `settings` table (key = `jwt_secret`), never from a committed default.
 WB_API_KEY = "greeny-wb-api-key-change-in-prod"
 WORKBUDDY_API_URL = ""
 WORKBUDDY_API_KEY = ""

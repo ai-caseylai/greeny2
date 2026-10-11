@@ -1,4 +1,19 @@
-import type { JwtPayload } from './types';
+import type { Env, JwtPayload } from './types';
+
+/**
+ * Single source of truth for the JWT signing/verification secret.
+ *
+ * The secret lives in the D1 `settings` table (key = `jwt_secret`), the same
+ * place the iot-hub Worker reads it from. There is intentionally NO fallback to
+ * an environment variable or a hardcoded default: this repo is public, so any
+ * committed default would be a publicly known signing key.
+ */
+export async function getJwtSecret(env: Env): Promise<string> {
+  const row = await env.DB.prepare(
+    "SELECT value FROM settings WHERE key = 'jwt_secret'"
+  ).first<{ value: string }>();
+  return row?.value || '';
+}
 
 function base64url(data: Uint8Array): string {
   return btoa(String.fromCharCode(...data)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
