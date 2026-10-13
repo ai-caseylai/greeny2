@@ -41,6 +41,10 @@
 
 # Part A — ESP32 裝置接入（重點）
 
+> 本節描述的是**協定本身**，任何語言的實作都適用。
+> 現成實作：Arduino → [`firmware/esp32/esp32.ino`](../firmware/esp32/esp32.ino)；
+> **MicroPython → [`firmware/esp32-micropython/main.py`](../firmware/esp32-micropython/main.py)**（見 F.5）。
+
 ## A.1 一句話總結
 
 ESP32 只需要做**一件事：開一條 WSS 連線**。
@@ -608,7 +612,7 @@ const wsUrl = `wss://iot-hub.ai-caseylai.workers.dev/dashboard/${deviceId}${toke
 
 - `iot-hub.funconnect.workers.dev`（**另一個 Cloudflare 帳號**）仍公開存在，且仍有相同的登入繞過漏洞
 - 裝置 ID（`esp32-sensor`）仍硬編碼於韌體
-- `WB_API_KEY` 仍為 `wrangler.toml` 內的公開預設值
+- ~~`WB_API_KEY` 仍為公開預設值~~ → ✅ **已修**（改為 Pages 專案的 `secret_text`，且從 `wrangler.toml` 移除；見 F.5）
 - 曾出現於對話中的憑證建議輪換（GitHub PAT、3 顆 Cloudflare token）
 
 
@@ -637,3 +641,59 @@ curl -X POST https://greeny.techforliving.net/api/telemetry \
 `GET /api/telemetry` 不受影響。
 
 > 註：`POST` 路徑目前沒有用戶端在使用（韌體走 WSS），保留是為了讓裝置可走 HTTPS 備援。
+
+
+## F.5 憑證清理與 MicroPython 客戶端（2026-10-11）
+
+### WB_API_KEY
+
+| 項目 | 前 | 後 |
+|---|---|---|
+| Pages 專案（production + preview） | `greeny-wb-api-key-change-in-prod`（公開預設） | **`secret_text`**（API 也讀不回） |
+| `spa/wrangler.toml` | 明文寫著預設值 | **已移除**，只留註解 |
+
+設為 `secret_text` 是刻意的：`wrangler pages deploy` 不會用 `[vars]` 覆蓋它，
+API 也無法讀出值。換 key 請到 Cloudflare → Pages → greeny → Settings → Environment variables。
+
+> ℹ️ `spa/functions/api/wb/` 底下**目前只有 `_middleware.ts`、沒有任何端點** ——
+> 這道鎖現在守著空氣，先把洞補上，避免將來加了端點就變成後門。
+
+### 移除舊的 `edge/src/index.mjs`
+
+該檔是舊的打包產物且被提交進 repo，內容包含**舊版有漏洞的登入查詢（`SELECT … salt`）與
+無認證的 WebSocket 升級區塊**，而 `edge/EDGE.md` 的舊部署指示正是教人上傳它。已 `git rm`。
+部署請一律用 `wrangler deploy`（bundle `src/index.ts`）。
+
+### 裝置憑證不再進版控
+
+Arduino 與 MicroPython 版的 device token 都改為從 gitignored 檔案讀取：
+
+| 版本 | 憑證檔 | 範本 |
+|---|---|---|
+| Arduino | `firmware/esp32/device_secrets.h` | — |
+| MicroPython | `firmware/esp32-micropython/device_secrets.py` | `device_secrets.example.py` |
+
+`esp32.ino` 用 `#if __has_include("device_secrets.h")`，沒有憑證檔時會退回佔位值
+（`REPLACE_WITH_DEVICE_TOKEN`，連線會被 401 拒絕）。
+
+### 新增：ESP32 MicroPython 客戶端
+
+`firmware/esp32-micropython/main.py` —— 與 Arduino 版行為一致的完整實作：
+
+- **自行實作 WebSocket handshake 與 frame 編解碼**，不依賴 `micropython-lib` 的
+  `websocket-client`（避免版本 API 差異）
+- WiFi / NTP / WSS 連線，憑證走 `?token=`
+- 每 10 秒送 `telemetry` + `ping`
+- 處理 `sync` / `set_led` / `calibrate` / `wifi_scan` / `wifi_set`，並回 `ack`
+- 30 秒無 inbound → 強制重連（看門狗）
+- 讀 DFRobot SEN0244（ADC 三次多項式 + 溫度補償）、DS18B20、pH 探頭
+
+已知差異（詳見該目錄 README）：
+
+| 項目 | Arduino | MicroPython |
+|---|---|---|
+| TLS 驗證 | ESP32 內建 CA bundle（完整驗證） | **預設 `TLS_VERIFY = False`**（仍加密，但不驗證伺服器身分） |
+| 校正值 | 存 EEPROM | 不持久化（`calibrate` 只量測回報，需寫回常數） |
+| WiFi 憑證 | 存 EEPROM | 執行期可切換並回滾，重開機回到 `device_secrets.py` |
+
+> ⚠️ MicroPython 版**未在實體硬體上驗證過**（開發環境無 ESP32）；已通過 `py_compile` 語法檢查。

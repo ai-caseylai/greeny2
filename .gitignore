@@ -5,4 +5,5 @@ toggle-log.jsonl
 *.png
 wifi.env
 device_secrets.h
+device_secrets.py
 build_output/
