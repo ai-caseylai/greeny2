@@ -2,12 +2,16 @@
 Usage: python3 smoke_test.py
 Requires: pip install websocket-client
 """
+import os
 import websocket
 import json
 import sys
 import time
 
-WS_URL = "wss://iot-hub.funconnect.workers.dev/dashboard/esp32-sensor"
+_TOKEN = os.environ.get("GREENY_TOKEN", "")
+if not _TOKEN:
+    raise SystemExit("需要 GREENY_TOKEN 環境變數（登入取得的 JWT）")
+WS_URL = f"wss://iot-hub.ai-caseylai.workers.dev/dashboard/esp32-sensor?token={_TOKEN}"
 DEVICE = "esp32-sensor"
 
 passed = 0

@@ -32,6 +32,22 @@ async function getJWTSecret(env: Env): Promise<string> {
   return cachedJWTSecret ?? "";
 }
 
+// ── Device token (for /device/:id WebSocket) ───────────────────────────────
+// Devices authenticate with ?token=<device_token> where the value lives in the
+// D1 `settings` table (key = `device_token`). Set one to enforce; if the row is
+// absent the device channel stays open so a fleet can be migrated gradually.
+
+let cachedDeviceToken: string | null = null;
+
+async function getDeviceToken(env: Env): Promise<string> {
+  if (cachedDeviceToken !== null) return cachedDeviceToken;
+  const row = await env.DB.prepare(
+    "SELECT value FROM settings WHERE key = 'device_token'"
+  ).first<{ value: string }>();
+  cachedDeviceToken = row?.value ?? "";
+  return cachedDeviceToken;
+}
+
 // ── JWT Middleware ────────────────────────────────────────────────────────
 // Whitelist: paths that skip auth
 
@@ -550,11 +566,34 @@ export default {
       }
     }
 
-    // --- WebSocket upgrade → route to DO ---
+    // --- WebSocket upgrade → route to DO (AUTHENTICATED) ---
+    // Browsers and ESP32 cannot set an Authorization header on a WebSocket
+    // handshake, so the credential travels in the `?token=` query parameter.
+    //   /dashboard/:id  → JWT (same secret as the REST API)
+    //   /device/:id     → device token (D1 settings.device_token)
     const upgrade = request.headers.get("Upgrade");
     if (upgrade === "websocket") {
       const segments = path.split("/").filter(Boolean);
       const deviceId = segments.length >= 2 ? segments[1] : "unknown";
+      const token = url.searchParams.get("token") || "";
+
+      if (path.startsWith("/dashboard/")) {
+        const secret = await getJWTSecret(env);
+        const payload = secret ? await verifyJWT(token, secret) : null;
+        if (!payload) {
+          return corsJson({ error: "Unauthorized" }, { status: 401 });
+        }
+      } else if (path.startsWith("/device/")) {
+        const expected = await getDeviceToken(env);
+        if (!expected) {
+          console.warn("[Worker] device_token not configured — device channel open");
+        } else if (token !== expected) {
+          console.warn(`[Worker] rejected device ${deviceId}: bad device token`);
+          return corsJson({ error: "Unauthorized device" }, { status: 401 });
+        }
+      } else {
+        return corsJson({ error: "Not found" }, { status: 404 });
+      }
 
       const doId = env.DEVICE_HUB.idFromName(deviceId);
       const stub = env.DEVICE_HUB.get(doId);
@@ -577,17 +616,20 @@ async function handleLogin(
       return corsJson({ error: "username and password required" }, { status: 400 });
     }
 
+    // NOTE: no `salt` column — the salt is embedded in the self-describing
+    // `pbkdf2:<iters>:<salt>:<hash>` value of password_hash, so the same row
+    // works on the Worker and on Pages Functions.
     const user = await env.DB.prepare(
-      "SELECT id, username, password_hash, salt, role FROM users WHERE username = ?"
+      "SELECT id, username, password_hash, role FROM users WHERE username = ?"
     ).bind(body.username).first<{
-      id: number; username: string; password_hash: string; salt: string; role: string;
+      id: number; username: string; password_hash: string; role: string;
     }>();
 
     if (!user) {
       return corsJson({ error: "Invalid credentials" }, { status: 401 });
     }
 
-    const valid = await verifyPassword(body.password, user.salt, user.password_hash);
+    const valid = await verifyPassword(body.password, user.password_hash);
     if (!valid) {
       return corsJson({ error: "Invalid credentials" }, { status: 401 });
     }

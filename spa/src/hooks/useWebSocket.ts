@@ -24,7 +24,7 @@ export function useWebSocket(deviceId: string | number | null) {
     // Prototype format: token via query param (browsers can't set WS headers)
     const token = getToken()
     const tokenParam = token ? `?token=${encodeURIComponent(token)}` : ''
-    const wsUrl = `wss://iot-hub.funconnect.workers.dev/dashboard/${deviceId}${tokenParam}`
+    const wsUrl = `wss://iot-hub.ai-caseylai.workers.dev/dashboard/${deviceId}${tokenParam}`
 
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
@@ -106,7 +106,7 @@ export function useWebSocket(deviceId: string | number | null) {
 
   const toggleLed = useCallback(async (devId: string, on: boolean): Promise<boolean> => {
     const relay1 = on ? 1 : 0
-    const apiBase = 'https://iot-hub.funconnect.workers.dev'
+    const apiBase = 'https://iot-hub.ai-caseylai.workers.dev'
 
     try {
       const res = await fetch(`${apiBase}/api/relay`, {

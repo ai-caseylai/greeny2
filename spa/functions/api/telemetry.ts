@@ -1,4 +1,14 @@
-import type { Env } from '../../_lib/types';
+import type { Env } from '../_lib/types';
+import { verify, extractBearerToken, getJwtSecret } from '../_lib/jwt';
+
+/** Device token lives in D1 settings (key = `device_token`), same value the
+ *  ESP32 sends on its WebSocket handshake (`/device/<id>?token=...`). */
+async function getDeviceToken(db: D1Database): Promise<string> {
+  const row = await db
+    .prepare("SELECT value FROM settings WHERE key = 'device_token'")
+    .first<{ value: string }>();
+  return row?.value ?? '';
+}
 
 export const onRequest: PagesFunction<Env>[] = [
   async (c) => {
@@ -6,6 +16,35 @@ export const onRequest: PagesFunction<Env>[] = [
     const db = c.env.DB;
 
     if (c.request.method === 'POST') {
+      // ── Auth ──────────────────────────────────────────────────────────
+      // This endpoint writes telemetry (and can raise alerts), so it must
+      // not be open to the internet. Accept either:
+      //   1. the device token  → ?token=<device_token>  or  X-Device-Token
+      //   2. a valid user JWT  → Authorization: Bearer <jwt>
+      const expected = await getDeviceToken(db);
+      const supplied =
+        url.searchParams.get('token') ||
+        c.request.headers.get('X-Device-Token') ||
+        '';
+
+      let authorized = false;
+      if (expected && supplied === expected) {
+        authorized = true;
+      } else {
+        const bearer = extractBearerToken(c.request);
+        if (bearer) {
+          const secret = await getJwtSecret(c.env);
+          if (secret && (await verify(bearer, secret))) authorized = true;
+        }
+      }
+
+      if (!authorized) {
+        return new Response(
+          JSON.stringify({ error: 'Unauthorized — device token or JWT required' }),
+          { status: 401, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
       const body = await c.request.json<{
         device_id?: string;
         ph?: number;

@@ -4,4 +4,5 @@ node_modules/
 toggle-log.jsonl
 *.png
 wifi.env
+device_secrets.h
 build_output/

@@ -20,9 +20,21 @@
 const char* WIFI_SSID     = "YOUR_SSID";
 const char* WIFI_PASS     = "YOUR_PASSWORD";
 
-const char* WS_HOST       = "iot-hub.funconnect.workers.dev";
+const char* WS_HOST       = "iot-hub.ai-caseylai.workers.dev";
 const uint16_t WS_PORT    = 443;
 const char* WS_PATH       = "/device/esp32-sensor";
+// Device token — 必須與 D1 `settings` 表的 `device_token` 相同，以 ?token=...
+// 附在 WebSocket handshake 的 URL 上送出。
+//
+// ⚠️ 這是憑證，**不要提交進 repo**。真實值放在同目錄的 device_secrets.h
+//    （已列入 .gitignore），內容為：
+//        #define WS_TOKEN "你的 device_token"
+#if __has_include("device_secrets.h")
+  #include "device_secrets.h"
+#endif
+#ifndef WS_TOKEN
+  #define WS_TOKEN "REPLACE_WITH_DEVICE_TOKEN"   // 佔位值：Worker 會回 401
+#endif
 
 #define LED_PIN             2
 #define ONEWIRE_PIN         13
@@ -916,12 +928,14 @@ void setup() {
   // NTP
   syncTime();
 
-  // WebSocket
-  USE_SERIAL.printf("WSS:  Connecting to wss://%s:%d%s\n", WS_HOST, WS_PORT, WS_PATH);
+  // WebSocket — device token 放在 query string (?token=)
+  char wsPath[192];
+  snprintf(wsPath, sizeof(wsPath), "%s?token=%s", WS_PATH, WS_TOKEN);
+  USE_SERIAL.printf("WSS:  Connecting to wss://%s:%d%s\n", WS_HOST, WS_PORT, wsPath);
 #if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 4)
-  webSocket.beginSslWithBundle(WS_HOST, WS_PORT, WS_PATH, NULL, 0, "");
+  webSocket.beginSslWithBundle(WS_HOST, WS_PORT, wsPath, NULL, 0, "");
 #else
-  webSocket.beginSslWithBundle(WS_HOST, WS_PORT, WS_PATH, NULL, "");
+  webSocket.beginSslWithBundle(WS_HOST, WS_PORT, wsPath, NULL, "");
 #endif
   webSocket.onEvent(webSocketEvent);
   webSocket.setReconnectInterval(5000);

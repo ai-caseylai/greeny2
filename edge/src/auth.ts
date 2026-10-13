@@ -106,9 +106,29 @@ export async function verifyJWT(
 
 // ── Password: hashPassword (PBKDF2) ────────────────────────────────────────
 
-export async function hashPassword(
+// Self-describing hash format shared with Pages Functions:
+//   pbkdf2:<iterations>:<hex salt>:<hex derived key>
+// Keeping ONE format means a user row works identically on the Worker and on
+// Pages Functions, and the row no longer depends on a separate `salt` column.
+
+const PBKDF2_ITERATIONS = 100_000;
+const SALT_BYTES = 16;
+
+function toHex(buf: ArrayBuffer | Uint8Array): string {
+  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function fromHex(hex: string): Uint8Array {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) out[i / 2] = parseInt(hex.substr(i, 2), 16);
+  return out;
+}
+
+async function derive(
   password: string,
-  salt: string
+  salt: Uint8Array,
+  iterations: number
 ): Promise<string> {
   const key = await crypto.subtle.importKey(
     "raw",
@@ -117,30 +137,49 @@ export async function hashPassword(
     false,
     ["deriveBits"]
   );
-
   const bits = await crypto.subtle.deriveBits(
-    {
-      name: "PBKDF2",
-      salt: encoder.encode(salt),
-      iterations: 100_000,
-      hash: "SHA-256",
-    },
+    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
     key,
     256
   );
+  return toHex(bits);
+}
 
-  return base64url(bits);
+/** Produce a `pbkdf2:...` hash for a new password. */
+export async function hashPassword(password: string): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
+  const derived = await derive(password, salt, PBKDF2_ITERATIONS);
+  return `pbkdf2:${PBKDF2_ITERATIONS}:${toHex(salt)}:${derived}`;
 }
 
 // ── Password: verifyPassword ───────────────────────────────────────────────
+//
+// Fail closed: anything that is not a `pbkdf2:` hash is rejected.
+// The old code path returned `true` for bcrypt (`$2...`) hashes, which let
+// anyone log in with ANY password. Never reintroduce that shortcut — migrate
+// legacy bcrypt rows to the pbkdf2 format instead.
 
 export async function verifyPassword(
   password: string,
-  salt: string,
-  hash: string
+  storedHash: string
 ): Promise<boolean> {
-  const computed = await hashPassword(password, salt);
-  return computed === hash;
+  if (!storedHash || !storedHash.startsWith("pbkdf2:")) return false;
+
+  const parts = storedHash.split(":");
+  if (parts.length !== 4) return false;
+
+  const iterations = parseInt(parts[1], 10);
+  if (!Number.isFinite(iterations) || iterations <= 0) return false;
+
+  const expected = parts[3];
+  const actual = await derive(password, fromHex(parts[2]), iterations);
+
+  if (actual.length !== expected.length) return false;
+  let diff = 0;
+  for (let i = 0; i < actual.length; i++) {
+    diff |= actual.charCodeAt(i) ^ expected.charCodeAt(i);
+  }
+  return diff === 0;
 }
 
 // ── Random Helpers ─────────────────────────────────────────────────────────

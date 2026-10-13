@@ -45,7 +45,7 @@ export function ChatWidget() {
 
     try {
       const token = getToken()
-      const res = await fetch('https://iot-hub.funconnect.workers.dev/api/chat', {
+      const res = await fetch('https://iot-hub.ai-caseylai.workers.dev/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

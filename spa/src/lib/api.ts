@@ -1,4 +1,4 @@
-const API_BASE = 'https://iot-hub.funconnect.workers.dev'
+const API_BASE = 'https://iot-hub.ai-caseylai.workers.dev'
 
 export function getToken(): string | null {
   return sessionStorage.getItem('token')

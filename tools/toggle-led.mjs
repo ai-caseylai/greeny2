@@ -9,7 +9,9 @@
  * Stats: node toggle-led.mjs --stats  (reads log and prints distribution)
  */
 
-const WS_URL = "wss://iot-hub.funconnect.workers.dev/dashboard/esp32-01";
+const TOKEN = process.env.GREENY_TOKEN || "";
+if (!TOKEN) { console.error("需要 GREENY_TOKEN 環境變數（登入取得的 JWT）"); process.exit(1); }
+const WS_URL = `wss://iot-hub.ai-caseylai.workers.dev/dashboard/esp32-01?token=${encodeURIComponent(TOKEN)}`;
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 const __dirname = dirname(fileURLToPath(import.meta.url));

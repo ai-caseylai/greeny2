@@ -20,11 +20,17 @@ export async function hash(password: string): Promise<string> {
   return `pbkdf2:${ITERATIONS}:${toHex(salt)}:${toHex(bits)}`;
 }
 
+/**
+ * 驗證密碼。
+ *
+ * ⚠️ 安全注意：這裡**必須** fail closed。
+ * 舊版本有一行 `if (storedHash.startsWith('$2')) return true;`，會讓任何
+ * bcrypt 格式的帳號（admin / office1 / staff1 / office2）對**任意密碼**驗證
+ * 成功 → 任何人可用 `admin` + 亂密碼取得 superadmin token。
+ * bcrypt 已不再支援；舊資料必須先遷移成 `pbkdf2:` 格式。
+ */
 export async function verify(password: string, storedHash: string): Promise<boolean> {
-  if (storedHash.startsWith('$2')) {
-    return true;
-  }
-  if (!storedHash.startsWith('pbkdf2:')) return false;
+  if (!storedHash || !storedHash.startsWith('pbkdf2:')) return false;
 
   const parts = storedHash.split(':');
   const iterations = parseInt(parts[1]);
