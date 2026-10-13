@@ -262,17 +262,24 @@ compatibility_date: 2025-12-01
 wss://iot-hub.ai-caseylai.workers.dev:443/device/esp32-sensor?token=<device_token>
 ```
 
-### 6.1 兩個現成實作
+### 6.1 三個現成實作
 
-| | Arduino | MicroPython |
-|---|---|---|
-| 檔案 | `firmware/esp32/esp32.ino` | `firmware/esp32-micropython/main.py` |
-| 憑證檔 | `firmware/esp32/device_secrets.h` | `firmware/esp32-micropython/device_secrets.py` |
-| 說明文件 | `firmware/FIRMWARE.md` | `firmware/esp32-micropython/README.md` |
-| 工具鏈 | arduino-cli + ESP32 board package 3.3.10 | esptool + mpremote |
-| TLS 驗證 | ✅ 用 ESP32 內建 CA bundle | ⚠️ 預設 `TLS_VERIFY = False`（仍加密，不驗證身分） |
-| 校正值儲存 | EEPROM | ❌ 不持久化（需寫回程式常數） |
-| 成熟度 | 已在實機運行過 | **未在實體硬體驗證過** |
+協定完全相同，挑一個用即可。
+
+| | Arduino 完整版 | **Arduino 精簡版** | MicroPython |
+|---|---|---|---|
+| 檔案 | `firmware/esp32/esp32.ino` | `firmware/greeny2_sensor/greeny2_sensor.ino` | `firmware/esp32-micropython/main.py` |
+| 憑證檔 | `firmware/esp32/device_secrets.h` | `firmware/greeny2_sensor/device_secrets.h` | `firmware/esp32-micropython/device_secrets.py` |
+| 說明文件 | `firmware/FIRMWARE.md` | 同目錄 `README.md` | `firmware/esp32-micropython/README.md` |
+| 行數 | ~1000 | ~374 | ~540 |
+| OLED 顯示 / Captive Portal / EEPROM 校正 | ✅ | ❌ | ❌ |
+| TLS 驗證 | ✅ 內建 CA bundle | ✅ 內建 CA bundle | ⚠️ 預設 `TLS_VERIFY = False` |
+| 校正值儲存 | EEPROM | 常數 | 常數 |
+| 工具鏈 | arduino-cli + esp32 core 3.3.10 | 同左 | esptool + mpremote |
+| 成熟度 | ✅ **曾在實機運行**（生產版本） | ⚠️ 未編譯／未上機驗證 | ⚠️ 未上機驗證（已過 `py_compile`） |
+
+> **選用建議**：上線 → 完整版（功能最齊）；要讀懂或改寫協定邏輯 → 精簡版或 MicroPython 版。
+> Arduino IDE 要求「資料夾名稱 = .ino 名稱」，所以精簡版放在 `greeny2_sensor/` 而非與完整版同目錄。
 
 ### 6.2 連線前置條件（缺一不可）
 
