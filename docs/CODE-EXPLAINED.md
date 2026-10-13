@@ -12,6 +12,11 @@
 > 本文件**不含任何憑證**（只寫存放位置）。不確定的地方標「（待確認）」，完整清單見附錄。
 > 行號以本次閱讀的版本為準（LF 換行）。⟶ 行號若位移，請以**函式名稱**搜尋。
 >
+> **最近一次局部複核（Captive Portal 接通）**：`firmware/esp32/esp32.ino` 已把
+> `startCaptivePortal()`／`handleCaptivePortal()` 接進 `setup()`／`loop()`，`inAPMode` 已實際使用；
+> 該檔行號因此整體位移（§6.1、§10.5 #30/#37/#38 的 `esp32.ino:xxx` 舊行號僅供參考）。
+> 本文件的**其餘**章節尚未重新複核。
+>
 > ⚠️ `edge/EDGE.md` 與根目錄 `PROTOCOL.md` 是早期設計文件，與現工程式碼已有落差
 > （`EDGE.md:189-206` 仍教人上傳已刪除的 `src/index.mjs`）。以本文件與 `edge/src/*.ts` 為準。
 
@@ -1359,13 +1364,30 @@ void loadCalibration() {
 `(0.010, 0.300)` 檢查合理性，不合理就單點 fallback 並印警告。`9.18 - 4.00` 對應
 pH 4.00 與 pH 9.18 兩種標準緩衝液。
 
-**Captive Portal（未使用）**：`startCaptivePortal()`（`:824`）與 `handleCaptivePortal()`
-（`:830`）實作了一個極簡 HTTP 伺服器，讓裝置開熱點（`Greeny-Alpha-Setup`）供手機設定
-WiFi。**但 `setup()` 完全沒有呼叫它們**——（待確認）是死碼或需手動加入呼叫。
-`CP_HTML`（`:764`）用 `PROGMEM` 存字串以節省 RAM（ESP32 的標準做法）。
-`handleCaptivePortal()` 內的手寫 HTTP 解析（`:862-865`）相當脆弱
-（`indexOf('&', ss)` 回 -1 時 `substring` 行為異常），但有 `urlDecode()`（`:810`）處理
-`%XX` 與 `+`。
+**Captive Portal（已接通 —— 2026-10 修正）**：`startCaptivePortal()`（`:860`）與
+`handleCaptivePortal()`（`:954`）實作了一個極簡 HTTP 伺服器，讓裝置開熱點
+（`Greeny-Alpha-Setup`）供手機設定 WiFi。原本 `setup()` 完全沒有呼叫它們（死碼），
+**現已接進 `setup()`／`loop()`**，實際接線為：
+
+| 函式 | 角色 |
+|---|---|
+| `enterAPMode()`（`:879`） | `WiFi.disconnect(false)` → `WiFi.mode(WIFI_AP_STA)` → `inAPMode = true` → 起熱點＋portal；只初始化一次 |
+| `runCaptivePortalLoop()`（`:903`） | 服務 portal、每 30 秒試連一次已存的 WiFi、10 分鐘逾時則重啟 |
+| `exitAPMode()`（`:890`） | 收掉 portal／熱點、回 `WIFI_STA`、清 `inAPMode` |
+| `captivePortalRestart()`（`:946`） | 逾時／存檔後的重啟：先寫 `EEPROM_WIFI_STA_CLEAR`（addr 139）旗標清 NVS STA 憑證，再 `ESP.restart()` |
+
+- `setup()`（`:1058-1069`）：`wifiConnectBlocking()` 失敗後進入
+  `while (WiFi.status() != WL_CONNECTED) { runCaptivePortalLoop(); }`，連上就繼續原本的 NTP／WSS 流程。
+  **正常連上時完全不會啟動熱點**（`startCaptivePortal()` 只在 `enterAPMode()` 內被呼叫）。
+- `loop()`（`:1093-1095`）：`if (inAPMode || WiFi.status() != WL_CONNECTED)` 時只服務 portal
+  （不送遙測、不碰 WSS，`:1138` 的遙測條件多加了 `!inAPMode`）。
+- **失敗模式安全網**：`softAP()` 失敗會每 5 秒重試（不會卡死），10 分鐘逾時一律重啟；
+  重啟前清 NVS STA 憑證，避免「拿同一組連不上的憑證無限重開」。
+- ⚠️ **尚未在實體硬體驗證**（只過編譯：1,182,090 B / 90%，arduino-cli 1.5.1 ＋ esp32 core 3.3.12）。
+  `CP_HTML`（`:791`）用 `PROGMEM` 存字串以節省 RAM（ESP32 的標準做法）。
+- `handleCaptivePortal()` 內的手寫 HTTP 解析本來相當脆弱（`indexOf('&', ss)` 回 -1 時
+  `substring` 行為異常），已補上 body 讀取逾時與 400 錯誤頁（`CP_ERR`，`:837`）；
+  `urlDecode()`（`:844`）處理 `%XX` 與 `+` 未變。
 
 ### 6.2 Arduino 精簡版（`firmware/greeny2_sensor/greeny2_sensor.ino`，472 行）
 
@@ -1376,7 +1398,7 @@ WiFi。**但 `setup()` 完全沒有呼叫它們**——（待確認）是死碼�
 | 項目 | 完整版 | 精簡版 |
 |---|---|---|
 | 行數 | 1004 | 472 |
-| OLED 顯示 / Captive Portal | ✅（Portal 未呼叫） | ❌ |
+| OLED 顯示 / Captive Portal | ✅（Portal 已接通，未上機驗證） | ❌ |
 | EEPROM 校正持久化 | ✅（但被 `setup()` 覆蓋） | ❌（用常數，`:100-102`） |
 | 序列埠校正 | ✅（實際不可用） | ❌ |
 | NTP timeout | ❌ 無限等待（`:101`） | ✅ 20 秒（`:151`） |
@@ -1995,7 +2017,8 @@ docs/{API,GUIDE}.md  ARCHITECTURE.md  PROTOCOL.md  .gitignore
 10. `useAlerts().acknowledge()` 打的 `PATCH /api/alerts/:id` 在 Worker 不存在（§5.4、§10.3 #17）
 11. `mgmtApiFetch` 缺 `/api` 前綴的多處呼叫——是否有 SPA fallback 掩蓋症狀（§5.1、§10.3 #15）
 12. `spa/functions/api/users/[id].ts` 為何不用 `c.params.id`（§4.4、§10.3 #14）
-13. Captive Portal 相關函式未被 `setup()` 呼叫（§6.1）
+13. ~~Captive Portal 相關函式未被 `setup()` 呼叫（§6.1）~~ → **已修（2026-10）**：
+    已接進 `setup()`／`loop()`，⚠️ 但尚未在實體硬體驗證（§6.1）
 14. `esp32.ino:897-902` 強制覆蓋校正值——暫時手段或預期行為（§6.1、§10.5 #30）
 15. `toggle-led.mjs:14` 用 `esp32-01` 而非 `esp32-sensor`（§7.3、§10.8 #53）
 

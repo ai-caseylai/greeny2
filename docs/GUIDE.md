@@ -48,6 +48,7 @@
 | **用戶與角色** | superadmin / office_admin / staff 三層權限 |
 | **AI 助手** | Workers AI 的 `GreenyAgent` Durable Object，可查詢系統狀態 |
 | **WiFi 遠端設定** | 從網頁掃描附近 AP、切換 ESP32 的 WiFi（失敗自動回滾） |
+| **Captive Portal 備援** | 完整版韌體在 WiFi 連不上時自己開熱點 `Greeny-Alpha-Setup`，用手機設定（詳見 §6.1） |
 | **WhatsApp 通知** | 對據點聯絡人發送訊息 |
 
 ### 關鍵設計取捨
@@ -271,12 +272,12 @@ wss://iot-hub.ai-caseylai.workers.dev:443/device/esp32-sensor?token=<device_toke
 | 檔案 | `firmware/esp32/esp32.ino` | `firmware/greeny2_sensor/greeny2_sensor.ino` | `firmware/esp32-micropython/main.py` |
 | 憑證檔 | `firmware/esp32/device_secrets.h` | `firmware/greeny2_sensor/device_secrets.h` | `firmware/esp32-micropython/device_secrets.py` |
 | 說明文件 | `firmware/FIRMWARE.md` | 同目錄 `README.md` | `firmware/esp32-micropython/README.md` |
-| 行數 | ~1000 | ~374 | ~540 |
+| 行數 | ~1150 | ~374 | ~540 |
 | OLED 顯示 / Captive Portal / EEPROM 校正 | ✅ | ❌ | ❌ |
 | TLS 驗證 | ✅ 內建 CA bundle | ✅ 內建 CA bundle | ⚠️ 預設 `TLS_VERIFY = False` |
 | 校正值儲存 | EEPROM | 常數 | 常數 |
 | 工具鏈 | arduino-cli 1.5.1 ＋ esp32 core 3.3.12 | 同左 | esptool + mpremote |
-| 成熟度 | ✅ **曾在實機運行** 且編譯通過（1,170,270 B / 89%） | ✅ **編譯通過**（1,115,705 B / 85%），⚠️ 未上機 | ⚠️ 未上機（已過 `py_compile`） |
+| 成熟度 | ✅ **曾在實機運行**；Captive Portal 已接通並編譯通過（1,182,090 B / 90%），⚠️ 該流程未上機 | ✅ **編譯通過**（1,115,705 B / 85%），⚠️ 未上機 | ⚠️ 未上機（已過 `py_compile`） |
 
 > **選用建議**：上線 → 完整版（功能最齊）；要讀懂或改寫協定邏輯 → 精簡版或 MicroPython 版。
 > Arduino IDE 要求「資料夾名稱 = .ino 名稱」，所以精簡版放在 `greeny2_sensor/` 而非與完整版同目錄。
@@ -286,6 +287,8 @@ wss://iot-hub.ai-caseylai.workers.dev:443/device/esp32-sensor?token=<device_toke
 1. **2.4 GHz WiFi**（ESP32 看不到 5 GHz）
 2. **先做 NTP 對時** —— ESP32 無電池 RTC，開機是 1970 → **TLS 憑證會被判定失效**
 3. TLS 用 ESP32 內建 CA bundle（Arduino）；MicroPython 需關閉驗證或自備 CA
+
+> 若連第一項都不成立（現場換了 WiFi、密碼改了），完整版會自動開熱點讓人重新設定 → §6.4。
 
 ### 6.3 燒錄
 
@@ -303,7 +306,25 @@ mpremote connect COM3 fs cp firmware/esp32-micropython/main.py           :main.p
 mpremote connect COM3 reset
 ```
 
-### 6.4 通訊協定摘要
+### 6.4 Captive Portal（完整版備援：WiFi 連不上時）
+
+完整版韌體（`firmware/esp32/esp32.ino`）在 **STA 連不上 WiFi** 時會自己開熱點，
+讓手機在沒有網路、沒有序列埠的情況下重新設定：
+
+1. 開機若 30 秒內連不上（EEPROM 或編譯期預設的）WiFi → 進入 AP 模式，
+   熱點名稱 **`Greeny-Alpha-Setup`**（無密碼），手機連上後開 `http://192.168.4.1`。
+2. 頁面可掃描附近 AP、輸入 SSID／密碼 → **Save & Reboot**：
+   憑證寫入 EEPROM（`0xAB` 旗標 ＋ SSID ＋ 密碼）後 `ESP.restart()`，重開即以新憑證連線。
+3. AP 模式期間**不送遙測、不連 WSS**；每 30 秒會試著連回原本的 WiFi，
+   連上就自動收掉熱點、回到正常流程。
+4. **逾時退路**：10 分鐘內沒設定、也沒連上 → 重啟裝置（避免永久卡在 AP 模式無法遠端救援）。
+   重啟前會清掉 WiFi NVS 的 STA 憑證，所以下次開機仍會回到 AP 模式，不會無線重開機。
+5. 連線中途掉線（非開機時）時，裝置仍以自動重連為主；只有持續連不上時才會走同一條 AP 模式流程。
+
+> ⚠️ 這條流程已接通並通過編譯，但**尚未在實體硬體上驗證**（見 §6.1 成熟度欄）。
+> 它與 §9.4 的 WSS `wifi_scan`／`wifi_set` 是**兩條獨立**的設定途徑：後者需要裝置已連上網路。
+
+### 6.5 通訊協定摘要
 
 | 方向 | 訊息 | 頻率 |
 |---|---|---|
@@ -320,7 +341,7 @@ mpremote connect COM3 reset
 >    **不是** `{"command":"set_led","state":true}`。
 > 2. `set_led`（持久佇列，離線補送）與 `calibrate`（QoS 0，離線丟棄）可靠性不同。
 
-### 6.5 硬體
+### 6.6 硬體
 
 | 用途 | 腳位 |
 |---|---|
@@ -529,7 +550,7 @@ npx wrangler d1 execute greeny-db --remote --file db/migrations/00X_xxx.sql
 | WS 連線被 404 | 路徑不對 | 必須是 `/device/<id>` 或 `/dashboard/<id>` |
 | TLS 握手失敗 | NTP 未同步（時鐘 1970） | 確認 `ntp_sync()` 成功；MicroPython 可設 `TLS_VERIFY=False` |
 | 連上又馬上斷、一直重連 | 上述 401/404/TLS | 看裝置序列埠輸出與 `wrangler tail` |
-| `set_led` 沒反應 | 參數沒包在 `params`（見 §6.4） | 改用 `{"command":"set_led","params":{"state":true}}` |
+| `set_led` 沒反應 | 參數沒包在 `params`（見 §6.5） | 改用 `{"command":"set_led","params":{"state":true}}` |
 | 校正沒反應 | 裝置離線 → QoS 0 丟棄 | 確認裝置在線再下校正指令 |
 | 有送遙測但收不到指令 | DO 沒把裝置登記為 `esp32ws` | 確認連的是 `/device/` 而非 `/dashboard/` |
 | EC 讀值接近滿刻度 | 探頭乾掉或未接 SEN0244 | 檢查接線 |

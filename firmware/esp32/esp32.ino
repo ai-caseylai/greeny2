@@ -70,6 +70,7 @@ const char* WS_PATH       = "/device/esp32-sensor";
 #define AP_MODE_TIMEOUT_MS      600000UL   // 10 分鐘
 #define AP_MODE_RETRY_MS        30000UL    // 每 30 秒試著連回已存的 WiFi
 #define AP_MODE_SOFTAP_RETRY_MS 5000UL     // softAP 啟動失敗時的重試間隔
+#define AP_MODE_EXIT_WAIT_MS    2000UL     // 離開 AP 模式前等手機斷線的上限
 
 WebSocketsClient webSocket;
 WiFiServer captiveServer(80);
@@ -890,7 +891,7 @@ static bool enterAPMode() {
 static void exitAPMode() {
   captiveServer.stop();
   unsigned long guard = millis();
-  while (WiFi.softAPgetStationNum() > 0 && millis() - guard < 2000) delay(50);
+  while (WiFi.softAPgetStationNum() > 0 && millis() - guard < AP_MODE_EXIT_WAIT_MS) delay(50);
   WiFi.softAPdisconnect(false);          // 關 AP，保留 STA 憑證
   WiFi.mode(WIFI_STA);
   inAPMode = false;
@@ -900,6 +901,12 @@ static void exitAPMode() {
 // AP 模式主迴圈：服務 portal、每 30 秒試連一次舊 WiFi、逾時則重啟。
 // 回傳 true = WiFi 已連上（可繼續 WSS）；回傳 false = 還在 AP 模式（呼叫端繼續等），
 // 只有在逾時時才會 ESP.restart()（不會回傳）。
+// 逾時重啟時是否要一併清除已存的 STA 憑證。
+// 只有「開機時就證明這組憑證連不上」才需要清（否則會拿著同一組憑證無限重開）。
+// 執行中遇到的路由器暫時斷線**不可以清** —— 那會讓已部署的裝置遺失 WiFi 設定，
+// 必須人工到現場用手機重新設定；這種情況只重開機、重試同一組憑證。
+static bool wipeStaCredentialsOnTimeout = true;
+
 static bool runCaptivePortalLoop() {
   static unsigned long lastRetryMs = 0;
 
@@ -944,10 +951,14 @@ static bool runCaptivePortalLoop() {
 // 避免下次開機又拿著同一組連不上的憑證無限重開。
 // 使用者剛存進 EEPROM 的新憑證不受影響（loadWiFiCredentials() 會優先採用）。
 static void captivePortalRestart() {
-  uint16_t clear = 1;
-  EEPROM.put(EEPROM_WIFI_STA_CLEAR, clear);
-  EEPROM.commit();
-  delay(200);
+  if (wipeStaCredentialsOnTimeout) {
+    uint16_t clear = 1;
+    EEPROM.put(EEPROM_WIFI_STA_CLEAR, clear);
+    EEPROM.commit();
+    delay(200);
+  } else {
+    USE_SERIAL.println("AP: keeping stored STA credentials (transient outage)");
+  }
   ESP.restart();
 }
 
@@ -1092,6 +1103,7 @@ void loop() {
   // 連回舊 WiFi 才會離開，逾時 10 分鐘則重啟（見 runCaptivePortalLoop()）。
   if (inAPMode || WiFi.status() != WL_CONNECTED) {
     WiFi.mode(WIFI_AP_STA);   // 只設定模式，不重打 WiFi.begin()（由 runCaptivePortalLoop() 節奏控制）
+    wipeStaCredentialsOnTimeout = false;   // 暫時斷線：保留憑證，只重開機重試
     runCaptivePortalLoop();
   }
 

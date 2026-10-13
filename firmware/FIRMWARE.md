@@ -227,7 +227,9 @@ ESP32 saves to EEPROM, disconnects, reconnects to new network. DO broadcasts `{t
 ## New Features (2026-07-05)
 
 ### WiFi Manager via WSS
-User scans networks from the dashboard, selects one, enters password, ESP32 switches. No captive portal, no physical button. Credentials saved to EEPROM (addresses 40-138: magic byte + SSID + password). Falls back to compiled defaults on failure. 2.4GHz only — ESP32 hardware limitation.
+User scans networks from the dashboard, selects one, enters password, ESP32 switches. No physical button. Credentials saved to EEPROM (addresses 40-138: magic byte + SSID + password). Falls back to compiled defaults on failure. 2.4GHz only — ESP32 hardware limitation.
+
+**Offline fallback (full version only):** if the ESP32 cannot join any known network at boot (or drops and stays down), it starts its own AP **`Greeny-Alpha-Setup`** and serves a captive portal on `192.168.4.1` where a phone can pick an SSID and save credentials (→ EEPROM → restart). AP mode serves the portal only — no telemetry, no WSS — and retries the saved network every 30s. Safety net: 10 minutes without a new configuration and it restarts (STA NVS credentials cleared, so the next boot lands back in AP mode instead of reboot-looping). Wired up but **not yet verified on real hardware**; see `docs/GUIDE.md` §6.4.
 
 ### WebSocket Watchdog
 Detects half-open WebSocket connections (common after Cloudflare Worker deploys where DO→ESP32 path breaks while ESP32→DO telemetry still flows). If 30 seconds pass with zero inbound data from the DO, the ESP32 disconnects and reconnects fresh. Self-healing — no manual replug needed after deploys.

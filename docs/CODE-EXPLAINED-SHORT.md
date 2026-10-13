@@ -64,7 +64,7 @@ AI agent 走路徑與指令下行相同，只換入口：`POST /api/chat` → `h
 | SPA `useSensorData.ts` | 存在唯一理由是**後端格式不統一**；`normalizeReading()` 吃掉 HTTP/WS 兩種扁平格式與 `temp`/`water_temp`、`led` bool/int | `spa/src/hooks/useSensorData.ts:37-68` |
 | SPA `useRacks.ts` | 管理 CRUD hook：沒有樂觀更新也沒有快取，每次寫入後重拉全部 → 多一趟往返換「前端狀態永遠等於後端」；空 catch 讓 403/500 使用者看不到 | `spa/src/hooks/useRacks.ts:22-34`、`:98-134` |
 | SPA 路由 | `ProtectedRoute` 包整個 `DashboardLayout`（不是每頁各包），側邊欄只在 `/login` 不出現；`SettingsPage` 用 WS 送 WiFi 指令，走 DO 泛用轉發 | `spa/src/App.tsx:15-51`、`spa/src/pages/SettingsPage.tsx:145-151` |
-| 韌體完整版 | 功能最完整（OLED、Captive Portal 未呼叫、序列埠校正實為死碼）；⚠️ `setup()` 每次開機覆蓋校正值、NTP 迴圈無 timeout | `firmware/esp32/esp32.ino:888-942`、`:897-902`、`:101` |
+| 韌體完整版 | 功能最完整（OLED、序列埠校正實為死碼；**Captive Portal 已於 2026-10 接通，⚠️ 未上機驗證**）；⚠️ `setup()` 每次開機覆蓋校正值、NTP 迴圈無 timeout | `firmware/esp32/esp32.ino:1022-1085`、`:1047-1052`、`:116` |
 | 韌體精簡版 | 同協定、只留必要邏輯；修掉完整版的兩個易錯點（NTP timeout、不印 token）但**校正只回報不儲存**，且 EC/pH 公式符號與完整版相反 | `firmware/greeny2_sensor/greeny2_sensor.ino:1-61`、`:151`、`:405`、`:274-302` |
 | 韌體 MicroPython | 自行實作 RFC 6455（120 行）避開套件版本地獄；⚠️ `TLS_VERIFY = False`（加密但不驗身分）是明示決定；主迴圈用例外做控制流 | `firmware/esp32-micropython/main.py:78-204`、`:52-56`、`:479-536` |
 | 工具 `greeny_check.py` | 22 項端到端檢查、**預設唯讀**，`critical` 旗標決定 exit code → 同時是報表與監控探針；每個正向測試配一個負向測試 | `tools/greeny_check.py:58-135`、`:325` |
@@ -206,7 +206,7 @@ D1 `greeny-db` 共 16 張表（盤點見 GUIDE §3，2026-10-13）。「關鍵�
 10. `useAlerts().acknowledge()` 打的 `PATCH /api/alerts/:id` 在 Worker 不存在（§5.4、§10.3 #17）
 11. `mgmtApiFetch` 缺 `/api` 前綴的多處呼叫——是否有 SPA fallback 掩蓋症狀（§5.1、§10.3 #15）
 12. `spa/functions/api/users/[id].ts` 為何不用 `c.params.id`（§4.4、§10.3 #14）
-13. Captive Portal 相關函式未被 `setup()` 呼叫（§6.1）
+13. ~~Captive Portal 相關函式未被 `setup()` 呼叫（§6.1）~~ → **已修（2026-10）**：已接進 `setup()`／`loop()`，⚠️ 尚未在實體硬體驗證
 14. `firmware/esp32/esp32.ino:897-902` 強制覆蓋校正值——暫時手段或預期行為（§6.1、§10.5 #30）
 15. `tools/toggle-led.mjs:14` 用 `esp32-01` 而非 `esp32-sensor`（§7.3、§10.8 #53）
 
