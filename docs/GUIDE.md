@@ -663,15 +663,36 @@ $sql = "SELECT * FROM users"
 curl https://iot-hub.ai-caseylai.workers.dev/health
 ```
 
-### 13.4 快速診斷腳本
+### 13.4 連線測試腳本
 
-`tools/greeny_probe.py` —— 唯讀健康檢查：健康端點、登入、REST 讀取、WebSocket 訂閱
-（**不會**操作繼電器）。使用：
+`tools/greeny_check.py` —— **端到端連線測試**，22 項檢查，涵蓋整條鏈路：
+
+| 區段 | 檢查內容 |
+|---|---|
+| 1. 基礎連線 | Worker `/health`、Pages SPA 首頁 |
+| 2. 使用者登入 | Worker 與 Pages 登入、**錯誤密碼必須被拒絕（401）** |
+| 3. Worker REST | `/api/auth/me`、`/api/devices`、`/api/telemetry`、`/api/alerts`、**無 token 必須 401** |
+| 4. Pages 管理 API | `/api/auth/me`、`/api/offices`、`/api/racks`、`/api/users`、`/api/dashboard/stats`、**無 token 必須 401** |
+| 5. 儀表板 WS | 無 token／假 token → 401；有效 JWT → 101 並收到 `state` |
+| 6. 裝置 WS | 無／錯 device token → 401；正確 token → 101 並收到 `sync` |
+| 7.（選用） | `POST /api/telemetry` 寫入測試 ＋ 無憑證必須 401 |
 
 ```powershell
 $env:PYTHONIOENCODING = "utf-8"
-python tools\greeny_probe.py
+$env:GREENY_USER = "admin"
+$env:GREENY_PASSWORD = "<密碼>"
+$env:GREENY_DEVICE_TOKEN = "<device_token>"
+
+python tools\greeny_check.py                 # 人看的輸出
+python tools\greeny_check.py --json          # 給監控用（失敗時 exit code 1）
+python tools\greeny_check.py --write-test     # 加測遙測寫入（會新增一筆資料）
 ```
+
+**設計上的安全細節**：裝置 WS 測試預設用 `<device-id>-probe` 這個探測 id，而非真實
+`device_id` —— 因為 Durable Object 只接受一個 `esp32` 連線，用真 id 會把**正在上線的
+裝置踢下線**。要對真實裝置測請明確加 `--device-ws-id esp32-sensor`。
+
+`tools/greeny_probe.py` 是較早的簡易版（保留備用）。
 
 ---
 
