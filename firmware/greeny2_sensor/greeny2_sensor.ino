@@ -53,8 +53,11 @@
  *
  *   ⚠️ 只能用 ADC1（GPIO 32–39）—— WiFi 開啟時 ADC2 不可用。
  *
- * ⚠️ 本檔**未經編譯驗證**（撰寫環境沒有安裝 arduino-cli / ESP32 core）。
- *    邏輯與 API 用法取自已在實機運行的 firmware/esp32/esp32.ino。
+ * ✅ 已用 arduino-cli 1.5.1 + esp32 core 3.3.12 編譯通過：
+ *      Sketch uses 1115705 bytes (85%) of program storage space.
+ *      Global variables use 48456 bytes (14%) of dynamic memory.
+ *    ⚠️ 尚未在實體硬體上執行過；邏輯與 API 用法取自已在實機運行的
+ *       firmware/esp32/esp32.ino。
  */
 
 #include <WiFi.h>

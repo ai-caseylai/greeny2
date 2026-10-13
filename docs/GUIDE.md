@@ -275,8 +275,8 @@ wss://iot-hub.ai-caseylai.workers.dev:443/device/esp32-sensor?token=<device_toke
 | OLED 顯示 / Captive Portal / EEPROM 校正 | ✅ | ❌ | ❌ |
 | TLS 驗證 | ✅ 內建 CA bundle | ✅ 內建 CA bundle | ⚠️ 預設 `TLS_VERIFY = False` |
 | 校正值儲存 | EEPROM | 常數 | 常數 |
-| 工具鏈 | arduino-cli + esp32 core 3.3.10 | 同左 | esptool + mpremote |
-| 成熟度 | ✅ **曾在實機運行**（生產版本） | ⚠️ 未編譯／未上機驗證 | ⚠️ 未上機驗證（已過 `py_compile`） |
+| 工具鏈 | arduino-cli 1.5.1 ＋ esp32 core 3.3.12 | 同左 | esptool + mpremote |
+| 成熟度 | ✅ **曾在實機運行** 且編譯通過（1,170,270 B / 89%） | ✅ **編譯通過**（1,115,705 B / 85%），⚠️ 未上機 | ⚠️ 未上機（已過 `py_compile`） |
 
 > **選用建議**：上線 → 完整版（功能最齊）；要讀懂或改寫協定邏輯 → 精簡版或 MicroPython 版。
 > Arduino IDE 要求「資料夾名稱 = .ino 名稱」，所以精簡版放在 `greeny2_sensor/` 而非與完整版同目錄。

@@ -13,7 +13,7 @@
 | WiFi 切換回滾 | ✅ | ✅ |
 | 看門狗（30s 重連） | ✅ | ✅ |
 | 遙測 / ping / ack / 指令 | ✅ | ✅（相同協定） |
-| 實機驗證 | ✅ 曾在實機運行 | ⚠️ **未編譯／未上機驗證** |
+| 驗證狀態 | ✅ 曾在實機運行 | ✅ **編譯通過**（arduino-cli 1.5.1 ＋ esp32 core 3.3.12）<br>⚠️ 尚未上機 |
 
 ## 為什麼有兩版
 
@@ -23,6 +23,17 @@
 
 > 建議：**要上線用完整版**；要理解或改寫協定邏輯看精簡版（或
 > [MicroPython 版](../esp32-micropython/main.py)）。
+
+## 編譯驗證結果
+
+```
+arduino-cli 1.5.1 ／ esp32:esp32 core 3.3.12
+Sketch uses 1115705 bytes (85%) of program storage space. Maximum is 1310720 bytes.
+Global variables use 48456 bytes (14%) of dynamic memory, leaving 279224 bytes for local variables.
+```
+
+只有 OneWire 函式庫自身的 `extra tokens at end of #undef directive` warning，與本程式無關。
+**尚未在實體硬體上執行過**，請先燒錄並觀察序列埠輸出。
 
 ## 資料夾結構（Arduino IDE 要求資料夾名稱 = .ino 名稱）
 
