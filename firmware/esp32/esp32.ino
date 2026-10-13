@@ -112,18 +112,45 @@ void syncTime() {
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
   time_t now = time(nullptr);
   int dots = 0;
-  while (now < 8 * 3600 * 2) {
+  // 逾時保護：NTP 被防火牆擋住時，原本的迴圈會永遠卡在 setup()，
+  // 裝置既不會連 WSS、也不會進 AP 模式（完全沒有退路）。
+  // configTime() 啟動的 SNTP 會在背景繼續嘗試，所以這裡放棄之後，
+  // loop() 會週期性重查（見 recheckTimeSync()），時鐘一有效就恢復正常。
+  const unsigned long NTP_TIMEOUT_MS = 30000UL;
+  const unsigned long ntpStartMs = millis();
+  while (now < 8 * 3600 * 2 && millis() - ntpStartMs < NTP_TIMEOUT_MS) {
     delay(500);
     USE_SERIAL.print(".");
     if (++dots % 20 == 0) USE_SERIAL.println();
     now = time(nullptr);
   }
+  USE_SERIAL.println();
+  if (now < 8 * 3600 * 2) {
+    timeSynced = false;
+    USE_SERIAL.println("NTP: TIMEOUT — clock still invalid.");
+    USE_SERIAL.println("NTP: TLS will fail until it syncs; SNTP keeps retrying in background.");
+    return;                       // 不再卡住 —— 讓 loop() 接手
+  }
   timeSynced = true;
   struct tm timeinfo;
   gmtime_r(&now, &timeinfo);
-  USE_SERIAL.println();
   USE_SERIAL.print("NTP: Synced — ");
   USE_SERIAL.print(asctime(&timeinfo));
+}
+
+// 由 loop() 週期性呼叫。若開機時 NTP 逾時，timeSynced 會一直是 false，
+// 而遙測的送出條件包含 timeSynced —— 沒有這段，裝置即使之後對時成功，
+// 也永遠不會送遙測。這裡讓它能自動恢復。
+void recheckTimeSync() {
+  if (timeSynced) return;
+  static unsigned long lastCheckMs = 0;
+  const unsigned long nowMs = millis();
+  if (lastCheckMs != 0 && nowMs - lastCheckMs < 5000UL) return;
+  lastCheckMs = nowMs;
+  if (time(nullptr) >= 8 * 3600 * 2) {
+    timeSynced = true;
+    USE_SERIAL.println("NTP: clock is now valid — resuming telemetry");
+  }
 }
 
 // ── LED control ─────────────────────────────────
@@ -1098,6 +1125,7 @@ void setup() {
 // ── Loop ────────────────────────────────────────
 void loop() {
   webSocket.loop();
+  recheckTimeSync();   // NTP 在開機時逾時的恢復路徑（見 syncTime）
 
   // AP 模式：只服務 captive portal（不送遙測、不碰 WSS）；
   // 連回舊 WiFi 才會離開，逾時 10 分鐘則重啟（見 runCaptivePortalLoop()）。
