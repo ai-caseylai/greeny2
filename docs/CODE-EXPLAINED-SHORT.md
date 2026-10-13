@@ -119,7 +119,7 @@ AI agent 走路徑與指令下行相同，只換入口：`POST /api/chat` → `h
 | 23 | DO | 廣播的 `device_id` 硬編碼 | `device_status: offline` 寫死 `"esp32-sensor"` → 多裝置時報錯裝置；應從 attachment 取 | `edge/src/device-hub.ts:542` |
 | 24 | DO | flush 不是原子操作 | 「先 INSERT 全部、再 UPDATE `flushed=1`」中間 crash → D1 重複列；目前接受 at-least-once | `edge/src/device-hub.ts:494-498` |
 | 25 | DO | `relay_queue` 在裝置重連時被清空 | 離線期間排隊的 `set_led` 會遺失；這是刻意的（避免重放校正指令），**不要順手修掉** | `edge/src/device-hub.ts:259-261` |
-| 26 | DO | `evaluateAlerts()` 用硬編碼閾值 | 改 `settings` 的 `ph_min` 等**不會改變警報行為**；閾值類 key 目前只有前端在用 | `edge/src/device-hub.ts:488-504` |
+| 26 | DO | ~~`evaluateAlerts()` 用硬編碼閾值~~ **已修** | 閾值改由 D1 `settings` 提供（DO 在 `alarm()` 讀取並快取，連線後約 1 秒即刷新）；設定頁已接上 `PUT /api/settings/thresholds` | `edge/src/device-hub.ts:505-524` |
 | 27 | 韌體 | NTP 必須在 WSS 之前 | 無電池 RTC → 時鐘是 1970 → 憑證被判「尚未生效」→ 握手失敗；須等 `time(nullptr) > 8*3600*2` | `firmware/esp32/esp32.ino:96-113`、`:101` |
 | 28 | 韌體 | `beginSslWithBundle(..., NULL, 0, "")` 三參數不能省 | `NULL, 0, ""` = 用 ESP32 內建 CA bundle（完整驗證）；Core ≥ 3.0.4 多一個參數 | `firmware/esp32/esp32.ino:935-939` |
 | 29 | 韌體 | ADC 只能用 ADC1（GPIO 32–39） | 用 ADC2 腳位在 WiFi 開啟時讀不到值；TDS = GPIO 35/36、pH = GPIO 39，新增感測器要確認腳位 | `firmware/esp32/esp32.ino`（ADC 讀取） |
@@ -190,7 +190,7 @@ D1 `greeny-db` 共 16 張表（盤點見 GUIDE §3，2026-10-13）。「關鍵�
 5. `relay_log` 同樣兩套欄位（DO：`command/params_json`；Pages：`relay1/relay2/ph_cal`）。
 6. `edge/db/schema.sql` 已過期（`:45` 仍寫 `salt TEXT NOT NULL`）：程式碼已改、repo schema 檔沒改，兩份 schema 不能同時是對的。
 
-**`settings` 的重要 key**：`jwt_secret`（Worker 與 Pages 共用同一把，token 兩邊都通；`edge/src/index.ts:29`、`spa/functions/_lib/jwt.ts:13`）、`device_token`（WS handshake 與 HTTPS 備援同一個值；`edge/src/index.ts:45`、`spa/functions/api/telemetry.ts:8`）、`ph_min`/`ph_max`/`ec_max`/`temp_min`/`temp_max`（**程式碼中沒有讀取**，只有前端顯示用——改它們不會改變警報行為）。共 22 個 key，程式碼只讀 7 個。
+**`settings` 的重要 key**：`jwt_secret`（Worker 與 Pages 共用同一把，token 兩邊都通；`edge/src/index.ts:29`、`spa/functions/_lib/jwt.ts:13`）、`device_token`（WS handshake 與 HTTPS 備援同一個值；`edge/src/index.ts:45`、`spa/functions/api/telemetry.ts:8`）、`ph_min`/`ph_max`/`ec_max`/`temp_min`/`temp_max`（**已由 DeviceHub 讀取**，是警報閾值的權威來源）。共 22 個 key，程式碼只讀 7 個。
 
 ## 7. 待確認清單（完整說明見 CODE-EXPLAINED.md 附錄）
 

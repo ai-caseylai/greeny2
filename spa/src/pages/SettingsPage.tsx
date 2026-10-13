@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { useState, useEffect, useRef } from 'react'
 import { useWebSocket } from '../hooks/useWebSocket'
+import { apiFetch } from '../lib/api'
 import { useToast } from '../components/Toast'
 import { Wifi, Wrench, Info, Search, Lock, Unlock, CheckCircle, XCircle, Loader2, WifiOff } from 'lucide-react'
 
@@ -44,14 +45,29 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false)
   const [wifiStatus, setWifiStatus] = useState<{ success: boolean; message: string } | null>(null)
 
-  // Maintenance thresholds — controlled inputs with localStorage persistence
+  // Maintenance thresholds. D1 `settings` is authoritative (the device's
+  // alerting reads it); localStorage is only a cache for instant rendering.
   const [thresholds, setThresholds] = useState(() => {
     try {
       const stored = localStorage.getItem('greeny-thresholds')
       if (stored) return JSON.parse(stored)
     } catch {}
-    return { phMin: '5.5', phMax: '7.5', ecMax: '2000', tempMin: '18', tempMax: '28' }
+    return { phMin: '5.5', phMax: '8.5', ecMax: '2000', tempMin: '18', tempMax: '30' }
   })
+
+  useEffect(() => {
+    let alive = true
+    apiFetch<{ thresholds: Record<string, number> }>('/api/settings/thresholds')
+      .then(({ thresholds: server }) => {
+        if (!alive || !server) return
+        setThresholds((prev: Record<string, string>) => ({
+          ...prev,
+          ...Object.fromEntries(Object.entries(server).map(([k, v]) => [k, String(v)])),
+        }))
+      })
+      .catch(() => { /* keep the cached copy if the API is unreachable */ })
+    return () => { alive = false }
+  }, [])
 
   const updateThreshold = (key: string, value: string) => {
     setThresholds((prev: typeof thresholds) => ({ ...prev, [key]: value }))
@@ -130,11 +146,22 @@ export default function SettingsPage() {
   const handleSaveThresholds = async () => {
     setSaving(true)
     setSaved(false)
-    localStorage.setItem('greeny-thresholds', JSON.stringify(thresholds))
-    await new Promise(r => setTimeout(r, 600))
-    setSaving(false)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+    try {
+      // Persist to D1 — the DeviceHub Durable Object reads these for alerting.
+      // Saving only to localStorage (the old behaviour) meant the device never
+      // saw the new thresholds.
+      await apiFetch('/api/settings/thresholds', {
+        method: 'PUT',
+        body: JSON.stringify(thresholds),
+      })
+      localStorage.setItem('greeny-thresholds', JSON.stringify(thresholds))
+      setSaved(true)
+    } catch {
+      setSaved(false)
+    } finally {
+      setSaving(false)
+      setTimeout(() => setSaved(false), 2000)
+    }
   }
 
   const signalBars = (rssi: number) => {

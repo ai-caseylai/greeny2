@@ -1807,7 +1807,7 @@ Pages `relay-logs.ts:14` 讀 `(id, relay1, relay2, ph_cal, status, created_at)`�
 |---|---|---|
 | `jwt_secret` | `edge/src/index.ts:29`、`spa/functions/_lib/jwt.ts:13` | JWT HS256 簽章與驗證密鑰。**Worker 與 Pages 共用同一把**，這是 token 兩邊都通的原因 |
 | `device_token` | `edge/src/index.ts:45`（WS）、`spa/functions/api/telemetry.ts:8`（POST） | 裝置憑證，同一個值用在 WS handshake 與 HTTPS 備援 |
-| `ph_min` / `ph_max` / `ec_max` / `temp_min` / `temp_max` | （待確認）程式碼中沒有讀取 | 警報閾值類，`docs/GUIDE.md` §8.4 標為「顯示用」 |
+| `ph_min` / `ph_max` / `ec_max` / `temp_min` / `temp_max` | **已由 `DeviceHub.alarm()` 讀取**（`edge/src/device-hub.ts`） | 警報閾值的權威來源，`evaluateAlerts()` 用它判斷；可用 `GET`/`PUT /api/settings/thresholds` 修改 |
 
 **關鍵觀察：閾值類的 key 目前「只有前端在用」**，後端的 `evaluateAlerts()`
 （`edge/src/device-hub.ts:490-502`）用的是硬編碼的 `5.5/8.5/2000/18/30`。
@@ -1896,7 +1896,7 @@ GUIDE §3 記錄 `settings` 有 22 個 key，但程式碼只讀 7 個，**其餘
 | 23 | **廣播的 `device_id` 硬編碼** | `device_status: offline` 寫死 `"esp32-sensor"`（`:542`）→ 多裝置時報錯裝置 | （待確認）應從 attachment 取 |
 | 24 | **flush 不是原子操作** | 「先 INSERT 全部、再 UPDATE flushed=1」中間 crash 會造成 D1 重複列 | 目前接受 at-least-once；要 exactly-once 需用 transaction |
 | 25 | **`relay_queue` 在裝置重連時被清空** | 離線期間排隊的 `set_led` 會遺失 | 這是刻意的（避免重放校正指令）；**不要「順手修掉」**（`:259-261`） |
-| 26 | **`evaluateAlerts()` 用硬編碼閾值** | 改 `settings` 的 `ph_min` 等**不會改變警報行為** | （待確認）是否有計畫改讀 D1 |
+| 26 | ~~**`evaluateAlerts()` 用硬編碼閾值**~~ **已修正** | 閾值現在來自 D1 `settings`：DO 在 `alarm()` 讀取並快取於 `device_state`，`evaluateAlerts()` 同步讀快取；連線後約 1 秒即刷新一次 | 新增 `GET`/`PUT /api/settings/thresholds`，設定頁已接上。已實測：把 `temp_max` 改成 26 後，temp=27 產生「（上限 26）」警報 |
 
 ### 10.5 韌體
 

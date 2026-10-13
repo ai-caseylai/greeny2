@@ -61,11 +61,24 @@ const char* WS_PATH       = "/device/esp32-sensor";
 #define EEPROM_WIFI_FLAG_ADDR   40    // 0xAB = custom WiFi stored
 #define EEPROM_WIFI_SSID_ADDR   41    // 33 bytes SSID
 #define EEPROM_WIFI_PASS_ADDR   74    // 65 bytes password
+#define EEPROM_WIFI_STA_CLEAR   139   // uint16 旗標：AP 逾時重啟後清除 NVS STA 憑證
 // ─────────────────────────────────────────────────
+
+// ── Captive Portal (AP 模式) ────────────────────
+// AP 逾時：時間到就重啟（避免無硬體救援時永久卡在 AP 模式）。
+// 使用者每次送出憑證都會 ESP.restart()，正常情況不會走到逾時。
+#define AP_MODE_TIMEOUT_MS      600000UL   // 10 分鐘
+#define AP_MODE_RETRY_MS        30000UL    // 每 30 秒試著連回已存的 WiFi
+#define AP_MODE_SOFTAP_RETRY_MS 5000UL     // softAP 啟動失敗時的重試間隔
 
 WebSocketsClient webSocket;
 WiFiServer captiveServer(80);
-bool inAPMode = false;
+bool inAPMode = false;                        // true = AP 模式，只服務 captive portal（不碰 WSS）
+unsigned long captivePortalStartMs = 0;       // AP 模式起始時間（逾時退路用）
+
+static bool enterAPMode();
+static bool runCaptivePortalLoop();
+static void captivePortalRestart();
 
 OneWire oneWire(ONEWIRE_PIN);
 DallasTemperature ds18b20(&oneWire);
@@ -218,6 +231,18 @@ void loadWiFiCredentials() {
     strcpy(wifiPass, WIFI_PASS);
     USE_SERIAL.printf("WiFi: Using compiled defaults: %s\n", wifiSsid);
   }
+
+  // AP 逾時重啟留下的旗標：清掉 WiFi NVS 裡的 STA 憑證，
+  // 讓下次開機不會又拿同一組連不上的憑證去連（見 captivePortalRestart()）。
+  uint16_t staClear = 0;
+  EEPROM.get(EEPROM_WIFI_STA_CLEAR, staClear);
+  if (staClear == 1) {
+    staClear = 0;
+    EEPROM.put(EEPROM_WIFI_STA_CLEAR, staClear);
+    EEPROM.commit();
+    WiFi.disconnect(true, false);   // 清 NVS STA 憑證，不動 softAP 設定
+    USE_SERIAL.println("WiFi: Cleared stored STA credentials (previous AP timeout)");
+  }
 }
 
 void saveWiFiCredentials(const char* ssid, const char* pass) {
@@ -256,7 +281,9 @@ void wifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
 
 void wifiConnectBlocking() {
   WiFi.onEvent(wifiEvent);
-  WiFi.begin(wifiSsid, wifiPass);
+  if (WiFi.status() != WL_CONNECTED) {   // AP 模式下已自行連上時不重打 WiFi.begin()
+    WiFi.begin(wifiSsid, wifiPass);
+  }
   USE_SERIAL.printf("WiFi: Connecting to %s...\n", wifiSsid);
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < 30000) {
@@ -807,6 +834,13 @@ static const char CP_OK[] PROGMEM =
 "div{text-align:center}h2{color:#00a65a}p{color:#94a3b8}</style></head>"
 "<body><div><h2>WiFi Saved!</h2><p>ESP32 is rebooting...</p></div></body></html>";
 
+static const char CP_ERR[] PROGMEM =
+"<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+"<title>Not saved</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"
+"background:#0f172a;color:#e2e8f0;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0}"
+"div{text-align:center}h2{color:#ef4444}p{color:#94a3b8}</style></head>"
+"<body><div><h2>Not saved</h2><p>SSID is required (max 32 chars). Go back and try again.</p></div></body></html>";
+
 static String urlDecode(String s) {
   String r;
   for (unsigned i = 0; i < s.length(); i++) {
@@ -821,10 +855,99 @@ static String urlDecode(String s) {
   return r;
 }
 
-void startCaptivePortal() {
-  WiFi.softAP("Greeny-Alpha-Setup");
+// 啟動 AP 熱點並註冊 portal。回傳 false = softAP 沒起來（硬體／WiFi 堆疊異常），
+// 由 runCaptivePortalLoop() 負責重試與逾時退路，不會讓裝置卡死。
+bool startCaptivePortal() {
+  bool ok = WiFi.softAP("Greeny-Alpha-Setup");
+  if (!ok) {                           // 舊版 core 的 softAP() 只檢查 IP 設定
+    IPAddress apIp = WiFi.softAPIP();
+    ok = (apIp[0] != 0 || apIp[1] != 0 || apIp[2] != 0 || apIp[3] != 0);
+  }
+  if (!ok) {
+    USE_SERIAL.println("AP: softAP() failed");
+    return false;
+  }
   USE_SERIAL.println("AP: Greeny-Alpha-Setup started — 192.168.4.1");
   captiveServer.begin();
+  return true;
+}
+
+// ── AP 模式進入／離開 ────────────────────────────
+// 注意：以下 AP 模式流程已「接通」（setup()/loop() 會呼叫），但
+// **尚未在實體硬體上驗證過** —— 熱點名稱、captive portal 表單、
+// softAP 逾時退路都只經過編譯驗證。
+static bool enterAPMode() {
+  if (inAPMode) return true;             // 只做一次初始化
+  USE_SERIAL.println("WiFi: FAILED to connect — entering AP mode (captive portal)");
+  WiFi.disconnect(false);                // 停掉 STA，但保留 NVS 憑證
+  WiFi.mode(WIFI_AP_STA);                // AP 服務 portal，STA 用來週期性重試
+  inAPMode = true;
+  wifiReconnecting = false;              // 避免 wifi_set 的 fallback 邏輯跟 AP 模式打架
+  captivePortalStartMs = millis();
+  return startCaptivePortal();
+}
+
+static void exitAPMode() {
+  captiveServer.stop();
+  unsigned long guard = millis();
+  while (WiFi.softAPgetStationNum() > 0 && millis() - guard < 2000) delay(50);
+  WiFi.softAPdisconnect(false);          // 關 AP，保留 STA 憑證
+  WiFi.mode(WIFI_STA);
+  inAPMode = false;
+  USE_SERIAL.println("AP: Captive portal stopped — back to STA mode");
+}
+
+// AP 模式主迴圈：服務 portal、每 30 秒試連一次舊 WiFi、逾時則重啟。
+// 回傳 true = WiFi 已連上（可繼續 WSS），false = 永不回傳（直接重啟）。
+static bool runCaptivePortalLoop() {
+  static unsigned long lastRetryMs = 0;
+
+  if (!inAPMode) lastRetryMs = millis();   // 重新進入 AP 模式時重置節奏
+  if (!enterAPMode()) {
+    // softAP 起不來（硬體／WiFi 堆疊異常）：不卡死 —— 5 秒後重試，
+    // 若一直失敗，下面的逾時退路仍會重啟裝置。
+    USE_SERIAL.println("AP: softAP start FAILED — retrying");
+    delay(AP_MODE_SOFTAP_RETRY_MS);
+    return false;
+  }
+
+  handleCaptivePortal();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    USE_SERIAL.println("WiFi: Reconnected while in AP mode — leaving captive portal");
+    exitAPMode();
+    return true;
+  }
+
+  unsigned long now = millis();
+  if (now - lastRetryMs >= AP_MODE_RETRY_MS) {
+    lastRetryMs = now;
+    if (wifiSsid[0] != '\0') {
+      WiFi.begin(wifiSsid, wifiPass);      // 舊網路可能只是暫時不在
+    } else {
+      WiFi.begin(WIFI_SSID, WIFI_PASS);    // 退回編譯期預設
+    }
+  }
+
+  // 逾時退路：10 分鐘內沒設定也沒連上 → 重啟（清除 NVS STA 憑證，
+  // 下次開機直接回到 AP 模式，不會無線重開機）。
+  if (now - captivePortalStartMs > AP_MODE_TIMEOUT_MS) {
+    USE_SERIAL.println("AP: timeout — no WiFi configured; restarting");
+    USE_SERIAL.flush();
+    captivePortalRestart();
+  }
+  return false;
+}
+
+// Captive portal 逾時重啟：不直接 ESP.restart()，先設旗標清除 NVS STA 憑證，
+// 避免下次開機又拿著同一組連不上的憑證無限重開。
+// 使用者剛存進 EEPROM 的新憑證不受影響（loadWiFiCredentials() 會優先採用）。
+static void captivePortalRestart() {
+  uint16_t clear = 1;
+  EEPROM.put(EEPROM_WIFI_STA_CLEAR, clear);
+  EEPROM.commit();
+  delay(200);
+  ESP.restart();
 }
 
 void handleCaptivePortal() {
@@ -857,24 +980,34 @@ void handleCaptivePortal() {
     }
   }
   else if (req.indexOf("POST /save") >= 0) {
-    // Read body
-    while (client.available()) { req += (char)client.read(); }
+    // Read body (帶 1 秒逾時的收尾，避免瀏覽器慢送時只收到半個 body)
+    unsigned long bt = millis();
+    while (client.connected() && millis() - bt < 1000) {
+      while (client.available()) { req += (char)client.read(); }
+      if (req.indexOf("ssid=") >= 0 && req.indexOf("pass=") >= 0) break;
+    }
     int ss = req.indexOf("ssid="), ps = req.indexOf("pass=");
     if (ss >= 0 && ps >= 0) {
       String sid = req.substring(ss+5, req.indexOf('&', ss));
       String pw = req.substring(ps+5, req.indexOf('&', ps) > 0 ? req.indexOf('&', ps) : req.length());
       sid = urlDecode(sid); pw = urlDecode(pw);
       if (sid.length() > 0 && sid.length() < 33) {
-        client.print("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n" + String(CP_OK));
-        client.stop();
+        // 存好憑證 → 回覆「已儲存」→ 重啟載入新設定（captivePortalRestart()）
         sid.toCharArray(wifiSsid, 33); pw.toCharArray(wifiPass, 65);
         EEPROM.put(EEPROM_WIFI_FLAG_ADDR, (uint8_t)0xAB);
         EEPROM.put(EEPROM_WIFI_SSID_ADDR, wifiSsid);
         EEPROM.put(EEPROM_WIFI_PASS_ADDR, wifiPass);
+        EEPROM.put(EEPROM_WIFI_STA_CLEAR, (uint16_t)0);
         EEPROM.commit();
-        delay(1500);
-        ESP.restart();
+        client.print("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n" + String(CP_OK));
+        client.flush();
+        delay(1500);          // 讓瀏覽器收到「WiFi Saved!」再重啟
+        captivePortalRestart();
+      } else {
+        client.print("HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\n\r\n" + String(CP_ERR));
       }
+    } else {
+      client.print("HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\n\r\n" + String(CP_ERR));
     }
   }
   else {
@@ -922,7 +1055,17 @@ void setup() {
 
   // Wi-Fi — load credentials from EEPROM or use compiled defaults
   loadWiFiCredentials();
+  startCaptivePortal();               // 先註冊 portal 路由（AP 熱點尚未啟動）
   wifiConnectBlocking();
+
+  // 連不上 → 進 AP 模式讓手機設定；只有在逾時（10 分鐘）才會重啟裝置
+  bool staFirstAttempt = true;
+  while (WiFi.status() != WL_CONNECTED) {
+    if (!staFirstAttempt) USE_SERIAL.println("WiFi: Still not connected");
+    staFirstAttempt = false;
+    if (runCaptivePortalLoop()) break;   // 期間連回舊 WiFi → 照原來流程繼續
+  }
+  if (inAPMode) exitAPMode();          // 正常連上時 AP 從未啟動，這裡是 no-op
 
   // NTP
   syncTime();
@@ -943,6 +1086,14 @@ void setup() {
 // ── Loop ────────────────────────────────────────
 void loop() {
   webSocket.loop();
+
+  // AP 模式：只服務 captive portal（不送遙測、不碰 WSS）；
+  // 連回舊 WiFi 才會離開，逾時 10 分鐘則重啟（見 runCaptivePortalLoop()）。
+  if (inAPMode || WiFi.status() != WL_CONNECTED) {
+    WiFi.mode(WIFI_AP_STA);   // 只設定模式，不重打 WiFi.begin()（由 runCaptivePortalLoop() 節奏控制）
+    runCaptivePortalLoop();
+  }
+
   handleSerialCalibration();
 
   // ── wifi_set result monitoring (non-blocking) ──
@@ -983,7 +1134,7 @@ void loop() {
     }
   }
 
-  if (timeSynced && webSocket.isConnected()) {
+  if (!inAPMode && timeSynced && webSocket.isConnected()) {
     unsigned long now = millis();
 
     // Watchdog: if DO→ESP32 path is broken (half-open after deploy),

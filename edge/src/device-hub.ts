@@ -41,10 +41,17 @@ export class DeviceHub extends DurableObject {
 
   private ledState = false;
   private lastTelemetryMs = 0; // for bidirectional health check
+  private esp32ConnectedAt = 0; // when the current device socket was accepted
   private tds = 0;
   private ec = 0;
   private ph = 7.0;
   private temp = 25.0;
+
+  // Alert thresholds. D1 `settings` is the source of truth; this field is a
+  // cache because the hot path (webSocketMessage) must never await. The
+  // constructor restores it from DO-local storage and alarm() refreshes it from
+  // D1 on every cycle, so an edit in the dashboard takes effect within ~60s.
+  private thresholds = { phMin: 5.5, phMax: 8.5, ecMax: 2000, tempMin: 18, tempMax: 30 };
 
   // ── Constructor ────────────────────────────────────────────────────────
 
@@ -92,6 +99,17 @@ export class DeviceHub extends DurableObject {
       key TEXT PRIMARY KEY,
       value TEXT
     )`);
+
+    // Restore the cached alert thresholds. The constructor cannot await, so this
+    // reads the DO-local copy that alarm() keeps in sync with D1.
+    try {
+      const saved = [...ctx.storage.sql.exec(
+        "SELECT value FROM device_state WHERE key = 'thresholds'"
+      )][0];
+      if (saved?.value) {
+        this.thresholds = { ...this.thresholds, ...JSON.parse(saved.value as string) };
+      }
+    } catch { /* first run — keep the defaults */ }
 
     // Restore WebSocket connections from hibernation
     ctx.getWebSockets().forEach((ws) => {
@@ -267,6 +285,7 @@ export class DeviceHub extends DurableObject {
       }
       this.esp32ws = server;
       this.lastTelemetryMs = 0; // reset health check
+      this.esp32ConnectedAt = Date.now();
       console.log(`[DO] ESP32 connected: ${deviceId}`);
       server.send(JSON.stringify({
         type: "sync", led: this.ledState, doTs: Date.now(),
@@ -283,7 +302,15 @@ export class DeviceHub extends DurableObject {
       }));
     }
 
-    await this.ctx.storage.setAlarm(Date.now() + 60_000);
+    // A brand-new DO has only the default thresholds until its first alarm, so
+    // a device that connects right after a threshold change would alert against
+    // stale numbers for a whole cycle. Run the alarm shortly after a device
+    // connects (it re-schedules itself at the normal 60s cadence afterwards).
+    // Dashboards keep the ordinary cadence.
+    const justConnected =
+      this.esp32ws !== null && this.esp32ConnectedAt > 0 &&
+      Date.now() - this.esp32ConnectedAt < 5_000;
+    await this.ctx.storage.setAlarm(Date.now() + (justConnected ? 1_000 : 60_000));
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -499,19 +526,23 @@ export class DeviceHub extends DurableObject {
   // ── Alert Thresholds ──────────────────────────────────────────────────
 
   private evaluateAlerts(ph: number, ec: number, temp: number): AlertDef[] {
+    // Thresholds now come from D1 `settings` (cached on this.thresholds), not
+    // from literals here — the settings page used to write only localStorage,
+    // so changing a threshold had no effect on alerting at all.
+    const t = this.thresholds;
     const alerts: AlertDef[] = [];
-    if (ph < 5.5) {
-      alerts.push({ type: "ph_low", message: `pH 过低: ${ph}`, severity: "warning" });
-    } else if (ph > 8.5) {
-      alerts.push({ type: "ph_high", message: `pH 过高: ${ph}`, severity: "warning" });
+    if (ph < t.phMin) {
+      alerts.push({ type: "ph_low", message: `pH 過低: ${ph}（下限 ${t.phMin}）`, severity: "warning" });
+    } else if (ph > t.phMax) {
+      alerts.push({ type: "ph_high", message: `pH 過高: ${ph}（上限 ${t.phMax}）`, severity: "warning" });
     }
-    if (ec > 2000) {
-      alerts.push({ type: "ec_high", message: `EC 超出阈值: ${ec} μS/cm`, severity: "warning" });
+    if (ec > t.ecMax) {
+      alerts.push({ type: "ec_high", message: `EC 超出閾值: ${ec} μS/cm（上限 ${t.ecMax}）`, severity: "warning" });
     }
-    if (temp < 18) {
-      alerts.push({ type: "temp_low", message: `温度过低: ${temp}°C`, severity: "warning" });
-    } else if (temp > 30) {
-      alerts.push({ type: "temp_high", message: `温度过高: ${temp}°C`, severity: "warning" });
+    if (temp < t.tempMin) {
+      alerts.push({ type: "temp_low", message: `溫度過低: ${temp}°C（下限 ${t.tempMin}）`, severity: "warning" });
+    } else if (temp > t.tempMax) {
+      alerts.push({ type: "temp_high", message: `溫度過高: ${temp}°C（上限 ${t.tempMax}）`, severity: "warning" });
     }
     return alerts;
   }
@@ -553,12 +584,17 @@ export class DeviceHub extends DurableObject {
     // Case 2 was previously missed entirely: once the first telemetry arrived,
     // a dead half-open socket was never detected.
     const STALL_MS = 90_000;
+    // Give a freshly accepted socket time to send its first frame — otherwise an
+    // alarm firing seconds after connect would kill a perfectly healthy device.
+    const CONNECT_GRACE_MS = 30_000;
+    const connectedFor = this.esp32ConnectedAt ? Date.now() - this.esp32ConnectedAt : Number.POSITIVE_INFINITY;
+    const silentSinceConnect = this.lastTelemetryMs === 0 && connectedFor > CONNECT_GRACE_MS;
     const stalled = this.lastTelemetryMs > 0 && Date.now() - this.lastTelemetryMs > STALL_MS;
-    if (this.esp32ws && (this.lastTelemetryMs === 0 || stalled)) {
+    if (this.esp32ws && (silentSinceConnect || stalled)) {
       const stale = this.esp32ws.deserializeAttachment() as Attachment | null;
       const staleId = stale?.deviceId ?? "unknown";
       console.log(
-        `[DO] health check FAILED (${this.lastTelemetryMs === 0 ? "no telemetry since connect" : `stalled ${Math.round((Date.now() - this.lastTelemetryMs) / 1000)}s`}) — forcing reconnect for ${staleId}`
+        `[DO] health check FAILED (${silentSinceConnect ? `no telemetry in ${Math.round(connectedFor / 1000)}s since connect` : `stalled ${Math.round((Date.now() - this.lastTelemetryMs) / 1000)}s`}) — forcing reconnect for ${staleId}`
       );
       try { this.esp32ws.close(1000, "Health check failed — reconnect"); } catch {}
       this.esp32ws = null;
@@ -569,6 +605,38 @@ export class DeviceHub extends DurableObject {
     }
 
     try {
+      // --- Refresh alert thresholds from D1 settings ---
+      // alarm() is the only DO entry point that may await, so this is where the
+      // D1 values are pulled in. evaluateAlerts() then reads the cache
+      // synchronously from the hot path.
+      try {
+        const rows = (await this.env.DB.prepare(
+          "SELECT key, value FROM settings WHERE key IN ('ph_min','ph_max','ec_max','temp_min','temp_max')"
+        ).all<{ key: string; value: string }>()).results ?? [];
+        if (rows.length) {
+          const num = (key: string, fallback: number) => {
+            const hit = rows.find((r) => r.key === key);
+            const n = hit ? parseFloat(String(hit.value)) : NaN;
+            return Number.isFinite(n) ? n : fallback;
+          };
+          this.thresholds = {
+            phMin: num("ph_min", this.thresholds.phMin),
+            phMax: num("ph_max", this.thresholds.phMax),
+            ecMax: num("ec_max", this.thresholds.ecMax),
+            tempMin: num("temp_min", this.thresholds.tempMin),
+            tempMax: num("temp_max", this.thresholds.tempMax),
+          };
+          this.ctx.storage.sql.exec(
+            "INSERT OR REPLACE INTO device_state (key, value) VALUES ('thresholds', ?)",
+            JSON.stringify(this.thresholds)
+          );
+          console.log("[alarm] thresholds →", JSON.stringify(this.thresholds));
+        }
+      } catch (e) {
+        console.error("[alarm] threshold refresh failed", e);
+        // Keep the cached values — alerting must not stop because D1 is busy.
+      }
+
       // --- Flush telemetry_buffer → D1 telemetry ---
       // Collect first: the loop mutates the table it is reading.
       const telRows = [...this.ctx.storage.sql.exec(
@@ -707,6 +775,14 @@ export class DeviceHub extends DurableObject {
       );
       this.ctx.storage.sql.exec(
         "DELETE FROM relay_log_buffer WHERE flushed = 1 AND id < (SELECT MAX(id) - 50 FROM relay_log_buffer)"
+      );
+
+      // relay_queue was the only table with no bound at all: queued commands
+      // disappeared only when the device reconnected or drained them, so a device
+      // that never comes back would grow the DO's SQLite forever. Keep the newest
+      // 50 commands (device commands are small and idempotent).
+      this.ctx.storage.sql.exec(
+        "DELETE FROM relay_queue WHERE id NOT IN (SELECT id FROM relay_queue ORDER BY id DESC LIMIT 50)"
       );
     } catch (e) {
       console.error("[alarm] outer handler error:", e);

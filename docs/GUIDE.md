@@ -408,7 +408,7 @@ node ..\spa\node_modules\wrangler\wrangler-dist\cli.js deploy
 |---|---|---|
 | D1 `settings` | `jwt_secret` | JWT 簽章密鑰（Worker 與 Pages 共用） |
 | D1 `settings` | `device_token` | 裝置認證 |
-| D1 `settings` | `ph_min/ph_max/ec_max/temp_min/temp_max` | 警報閾值（顯示用） |
+| D1 `settings` | `ph_min/ph_max/ec_max/temp_min/temp_max` | **警報閾值（權威來源）** —— DeviceHub 每個 alarm 週期讀取，改這裡就會改變警報行為。可透過 `GET`/`PUT /api/settings/thresholds` 或設定頁修改（<60 秒生效） |
 | Pages 專案 | `WB_API_KEY` | **`secret_text`**（`/api/wb/*` 用；該路徑目前無端點） |
 | Pages 專案 | `API_KEY`、`WORKBUDDY_*` | 空值（保留） |
 | 本機 | `wifi.env`、`device_secrets.*` | 已 gitignore |

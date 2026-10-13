@@ -697,3 +697,28 @@ Arduino 與 MicroPython 版的 device token 都改為從 gitignored 檔案讀取
 | WiFi 憑證 | 存 EEPROM | 執行期可切換並回滾，重開機回到 `device_secrets.py` |
 
 > ⚠️ MicroPython 版**未在實體硬體上驗證過**（開發環境無 ESP32）；已通過 `py_compile` 語法檢查。
+
+---
+
+## Part G — 警報閾值端點（2026-10-13 新增）
+
+閾值存放在 D1 `settings`（`ph_min`、`ph_max`、`ec_max`、`temp_min`、`temp_max`），
+是**警報行為的權威來源**。`DeviceHub` Durable Object 在每個 `alarm()` 週期讀取並快取
+（存於 DO-local `device_state`），`evaluateAlerts()` 從快取同步判斷。
+
+| 方法 | 路徑 | 認證 | 說明 |
+|---|---|---|---|
+| `GET` | `/api/settings/thresholds` | JWT | 回傳 `{ thresholds: { phMin, phMax, ecMax, tempMin, tempMax } }` |
+| `PUT` | `/api/settings/thresholds` | JWT | body 可只帶要改的欄位，名稱同回傳（或 D1 key 名）。回 `{ ok, updated, note }` |
+
+```bash
+curl -X PUT https://iot-hub.ai-caseylai.workers.dev/api/settings/thresholds \
+  -H "Authorization: Bearer <JWT>" -H "Content-Type: application/json" \
+  -d '{"tempMax": 26}'
+```
+
+**生效時間**：裝置連線後約 1 秒（DO 會提早觸發一次 alarm），其餘情況最多 60 秒
+（下一個 alarm 週期）。
+
+> 在此之前，設定頁只把閾值寫進瀏覽器 `localStorage`，**後端完全沒有讀取**，
+> 因此修改閾值不會對警報造成任何影響。

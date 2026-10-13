@@ -556,6 +556,11 @@ export default {
       if (method === "POST" && path === "/api/alerts/ack") {
         return handleAckAlert(request, env);
       }
+      // Alert thresholds live in D1 so the DeviceHub DO can read them.
+      if (path === "/api/settings/thresholds") {
+        if (method === "GET") return handleGetThresholds(env);
+        if (method === "PUT") return handlePutThresholds(request, env);
+      }
 
       if (method === "POST" && path === "/api/relay") {
         return handleRelay(request, env);
@@ -726,6 +731,65 @@ async function handleGetAlerts(
 
   const rows = await env.DB.prepare(sql).bind(...params).all();
   return corsJson({ alerts: rows.results });
+}
+
+// ─── Alert thresholds (D1 `settings`) ────────────────────────────────────────
+// DeviceHub caches these during alarm() and evaluates alerts against the cache,
+// so writing here changes alerting behaviour within one alarm cycle. Previously
+// the settings page wrote only to localStorage and nothing read it back, so
+// editing a threshold had no effect at all.
+
+const THRESHOLD_FIELDS: Record<string, string> = {
+  ph_min: "phMin",
+  ph_max: "phMax",
+  ec_max: "ecMax",
+  temp_min: "tempMin",
+  temp_max: "tempMax",
+};
+
+async function handleGetThresholds(env: Env): Promise<Response> {
+  const rows = await env.DB.prepare(
+    "SELECT key, value FROM settings WHERE key IN ('ph_min','ph_max','ec_max','temp_min','temp_max')"
+  ).all<{ key: string; value: string }>();
+  const thresholds: Record<string, number> = {};
+  for (const r of rows.results ?? []) {
+    const n = parseFloat(String(r.value));
+    if (Number.isFinite(n)) thresholds[THRESHOLD_FIELDS[r.key] ?? r.key] = n;
+  }
+  return corsJson({ thresholds });
+}
+
+async function handlePutThresholds(request: Request, env: Env): Promise<Response> {
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return corsJson({ error: "invalid JSON body" }, { status: 400 });
+  }
+
+  const updated: Record<string, number> = {};
+  for (const [key, field] of Object.entries(THRESHOLD_FIELDS)) {
+    const raw = body[field] ?? body[key];
+    if (raw === undefined || raw === null || raw === "") continue;
+    const n = parseFloat(String(raw));
+    if (!Number.isFinite(n)) {
+      return corsJson({ error: `invalid value for ${field}` }, { status: 400 });
+    }
+    await env.DB.prepare(
+      `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch())
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = unixepoch()`
+    ).bind(key, String(n)).run();
+    updated[field] = n;
+  }
+
+  if (!Object.keys(updated).length) {
+    return corsJson({ error: "no threshold fields supplied" }, { status: 400 });
+  }
+  return corsJson({
+    ok: true,
+    updated,
+    note: "DeviceHub applies these on its next alarm cycle (within ~60s)",
+  });
 }
 
 async function handleAckAlert(
