@@ -927,11 +927,19 @@ ${userMessage}
       JSON.stringify({ type: "idle" }),
     );
 
-    // Forward calibration to ESP32 via DeviceHub DO
+    // Forward calibration to ESP32 via DeviceHub DO.
+    // NOTE: `type: "ph"` is not understood by the firmware — esp32.ino handles
+    // only reset | ec_zero | ec_1413 | ec_value | ph_7 | ph_4 | ph_9, and it
+    // answers `status: "ok"` even for unknown types. The unit also differs:
+    // `slope` here is ΔpH/ΔpH-ish while the firmware stores phSlope in V/pH, so
+    // writing these values through would be wrong even if a branch existed.
+    // We still forward it (a future firmware may accept it) but we never claim
+    // the device applied it — see the reply text below.
+    let forwarded = false;
     try {
       const doId = this.env.DEVICE_HUB.idFromName(deviceId);
       const stub = this.env.DEVICE_HUB.get(doId);
-      await stub.fetch(
+      const resp = await stub.fetch(
         new Request("https://device-hub/relay-cmd", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -947,6 +955,7 @@ ${userMessage}
           }),
         }),
       );
+      forwarded = resp.ok;
     } catch (err) {
       console.log("[GreenyAgent] calibrate forward to ESP32 failed:", err);
     }
@@ -963,14 +972,16 @@ ${userMessage}
       health = `Poor — the slope is below 70% of ideal. Your probe needs replacement — it can't maintain accuracy even with calibration.`;
     }
 
-    return `**Calibration complete!** Here's what we found:
+    return `**Calibration analysis complete.** Here's what the numbers say:
 
 - **Slope:** ${slope.toFixed(2)} mV/pH (${slopePct.toFixed(1)}% of ideal ${idealSlope} mV/pH)
 - **Offset:** ${offset.toFixed(3)} pH units at pH 7.0
 
 ${health}
 
-The new calibration has been sent to your ESP32. All future pH readings will use these values. You can verify by checking that the probe now reads close to the buffer values.`;
+**Please note: these values were NOT written to the device.** This firmware does not accept a direct slope/offset write${forwarded ? " — the command was forwarded, but the device only responds to the standard buffer calibration types" : ", and the device could not be reached this time"}. Nothing was stored in its EEPROM, so current pH readings are unchanged.
+
+To actually apply a calibration, use the standard two-point buffer procedure from the device control page: probe in **pH 7.0** buffer first, then **pH 4.0** (or **pH 9.0** for alkaline). The device performs the maths and stores the result itself, and it survives reboots.`;
   }
 
   /** Describe current calibration step to the user */
