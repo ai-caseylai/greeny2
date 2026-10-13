@@ -894,12 +894,11 @@ void setup() {
 
   EEPROM.begin(512);
   loadCalibration();
-  // Force calibration for inverted board (override any EEPROM corruption)
-  tdsKValue = 0.088;
-  ecOffset = 201.0;
-  EEPROM.put(EEPROM_K_ADDR, tdsKValue);
-  EEPROM.put(EEPROM_EC_OFFSET_ADDR, ecOffset);
-  EEPROM.commit();
+  // NOTE: 這裡原本有一段「強制覆蓋」程式碼，每次開機都把
+  //   tdsKValue = 0.088 / ecOffset = 201.0 寫回 EEPROM，導致透過 WSS 做的
+  //   EC 校正**每次重開機就白做**（與上一行 loadCalibration() 直接矛盾）。
+  //   已移除。要回復預設值請用校正指令 {"type":"reset"}（CAL:RESET），
+  //   或在此處加入「只套用一次」的 EEPROM 版本旗標。
 
   oledInit();
 

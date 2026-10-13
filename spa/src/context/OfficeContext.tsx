@@ -20,13 +20,18 @@ const STORAGE_KEY = 'greeny-selected-office'
 export function OfficeProvider({ children }: { children: ReactNode }) {
   const [selectedOfficeId, setSelectedOfficeId] = useState<number | null>(() => {
     const saved = localStorage.getItem(STORAGE_KEY)
-    return saved ? Number(saved) : 9
+    // No hardcoded fallback: this used to default to office id 9, which does not
+    // exist for most deployments and silently scoped queries to a phantom office.
+    return saved ? Number(saved) : null
   })
 
-  // Read user from localStorage to determine role and office
+  // Read the logged-in user to determine role and office.
+  // NOTE: useAuth() stores this in **sessionStorage**, not localStorage — reading
+  // the wrong store made `user` always null here, so `userRole` was null and no
+  // office_admin was ever locked to their own office.
   const getUser = (): User | null => {
     try {
-      const stored = localStorage.getItem('user')
+      const stored = sessionStorage.getItem('user') ?? localStorage.getItem('user')
       return stored ? JSON.parse(stored) : null
     } catch { return null }
   }

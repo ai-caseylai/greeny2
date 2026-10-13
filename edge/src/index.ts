@@ -619,10 +619,13 @@ async function handleLogin(
     // NOTE: no `salt` column — the salt is embedded in the self-describing
     // `pbkdf2:<iters>:<salt>:<hash>` value of password_hash, so the same row
     // works on the Worker and on Pages Functions.
+    // `active = 1` matters: without it, a disabled account could still log in
+    // here (Pages already filtered on it, but the SPA authenticates HERE).
     const user = await env.DB.prepare(
-      "SELECT id, username, password_hash, role FROM users WHERE username = ?"
+      "SELECT id, username, password_hash, role, office_id, display_name FROM users WHERE username = ? AND active = 1"
     ).bind(body.username).first<{
       id: number; username: string; password_hash: string; role: string;
+      office_id: number | null; display_name: string;
     }>();
 
     if (!user) {
@@ -634,15 +637,34 @@ async function handleLogin(
       return corsJson({ error: "Invalid credentials" }, { status: 401 });
     }
 
+    // The JWT payload MUST match what Pages Functions signs
+    // (spa/functions/api/auth/login.ts): {sub, username, role, office_id,
+    // display_name}. The SPA's token is used against BOTH the Worker and the
+    // Pages management API, and the Pages routes rely on
+    // `c.data.user.office_id` — a payload without it made every office_admin
+    // look like they belonged to no office (and staff/user rows bind undefined).
     const secret = await getJWTSecret(env);
     const token = await signJWT(
-      { sub: user.username, id: user.id, role: user.role, iat: Math.floor(Date.now() / 1000) },
+      {
+        sub: user.id,
+        username: user.username,
+        role: user.role,
+        office_id: user.office_id,
+        display_name: user.display_name,
+        iat: Math.floor(Date.now() / 1000),
+      },
       secret
     );
 
     return corsJson({
       token,
-      user: { id: user.id, username: user.username, role: user.role },
+      user: {
+        id: user.id,
+        username: user.username,
+        role: user.role,
+        office_id: user.office_id,
+        display_name: user.display_name,
+      },
     });
   } catch (err) {
     return corsJson({ error: "Bad request" }, { status: 400 });

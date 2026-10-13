@@ -532,75 +532,113 @@ export class DeviceHub extends DurableObject {
     console.log("[DO] alarm() firing");
 
     // --- Bidirectional health check ---
-    // If ESP32 connected within last 30s but zero telemetry received,
-    // the outgoing WebSocket path is broken (common after deploys).
-    // Close it — ESP32 will reconnect fresh in both directions.
-    if (this.esp32ws && this.lastTelemetryMs === 0) {
-      console.log("[DO] health check FAILED — no telemetry since connect. Forcing reconnect.");
+    // The device sends telemetry every 10s, so "connected but silent" means the
+    // DO→ESP32 path is broken (common after deploys). Two cases to catch:
+    //   1. nothing received since connect        (lastTelemetryMs === 0)
+    //   2. received something, then it stopped   (stalled)
+    // Case 2 was previously missed entirely: once the first telemetry arrived,
+    // a dead half-open socket was never detected.
+    const STALL_MS = 90_000;
+    const stalled = this.lastTelemetryMs > 0 && Date.now() - this.lastTelemetryMs > STALL_MS;
+    if (this.esp32ws && (this.lastTelemetryMs === 0 || stalled)) {
+      const stale = this.esp32ws.deserializeAttachment() as Attachment | null;
+      const staleId = stale?.deviceId ?? "unknown";
+      console.log(
+        `[DO] health check FAILED (${this.lastTelemetryMs === 0 ? "no telemetry since connect" : `stalled ${Math.round((Date.now() - this.lastTelemetryMs) / 1000)}s`}) — forcing reconnect for ${staleId}`
+      );
       try { this.esp32ws.close(1000, "Health check failed — reconnect"); } catch {}
       this.esp32ws = null;
-      this.broadcast({ type: "device_status", device_id: "esp32-sensor", status: "offline" });
+      this.lastTelemetryMs = 0;
+      // NOTE: device_id used to be hardcoded to "esp32-sensor" here, which
+      // misreported every other device. Use the connection's real id.
+      this.broadcast({ type: "device_status", device_id: staleId, status: "offline" });
     }
 
     try {
       // --- Flush telemetry_buffer → D1 telemetry ---
-      const telCursor = this.ctx.storage.sql.exec(
+      // Collect first: the loop mutates the table it is reading.
+      const telRows = [...this.ctx.storage.sql.exec(
         "SELECT id, device_id, tds, ec, ph, temp, led, esp32_ms, do_ms FROM telemetry_buffer WHERE flushed = 0"
-      );
-      for (const row of telCursor) {
+      )];
+      for (const row of telRows) {
         try {
+          const doMs = row.do_ms ?? Date.now();
+          // ── Why this looks odd (it is all load-bearing) ──────────────
+          // 1. FK: telemetry.device_id REFERENCES devices(id) and D1 ENFORCES
+          //    foreign keys, so a device that was never registered made every
+          //    insert fail. Register it first (same upsert the Pages telemetry
+          //    POST uses).
+          // 2. The D1 schema has `water_temp`, NOT `temp`, and has NO `led`
+          //    column — the previous INSERT named three columns that do not
+          //    exist (temp, led, esp32_ms), so EVERY flush failed silently and
+          //    no device telemetry ever reached D1.
+          // 3. `led` is stored as relay1 (the aquagreen-era writer did the same).
+          // 4. `ts_ms` is NOT NULL and holds epoch ms for the history charts —
+          //    do_ms (server epoch ms) fills both.
           await this.env.DB.prepare(
-            `INSERT INTO telemetry (device_id, tds, ec, ph, temp, led, esp32_ms, do_ms)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)`
-          ).bind(row.device_id, row.tds, row.ec, row.ph, row.temp, row.led,
-                 row.esp32_ms, row.do_ms).run();
+            `INSERT INTO devices (id, name, floor, location, status, last_seen)
+             VALUES (?1, ?1, 1, '', 'online', ?2)
+             ON CONFLICT(id) DO UPDATE SET status = 'online', last_seen = ?2`
+          ).bind(row.device_id, Math.floor(doMs / 1000)).run();
+
+          await this.env.DB.prepare(
+            `INSERT INTO telemetry
+               (device_id, tds, ec, ph, water_temp, relay1, esp32_ms, do_ms, ts_ms)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8)`
+          ).bind(row.device_id, row.tds, row.ec, row.ph, row.temp, row.led ? 1 : 0,
+                 row.esp32_ms, doMs).run();
+          // Mark THIS row flushed only after a confirmed insert.
+          // The old code ran one unconditional `UPDATE ... WHERE flushed = 0`
+          // after the loop, so a failed insert was marked flushed anyway and the
+          // sample was lost forever (at-most-once). Now a failure stays unflushed
+          // and is retried on the next alarm cycle.
+          this.ctx.storage.sql.exec(
+            "UPDATE telemetry_buffer SET flushed = 1 WHERE id = ?", row.id
+          );
         } catch (e) {
           console.error("[alarm] telemetry insert failed for row", row.id, e);
-          // Don't rethrow — continue to next row
+          // Don't rethrow — the row stays unflushed and will be retried.
         }
       }
-      this.ctx.storage.sql.exec(
-        "UPDATE telemetry_buffer SET flushed = 1 WHERE flushed = 0"
-      );
-      console.log("[alarm] flushed telemetry_buffer");
+      console.log(`[alarm] flushed ${telRows.length} telemetry rows`);
 
       // --- Flush alert_buffer → D1 alerts ---
-      const alertCursor = this.ctx.storage.sql.exec(
+      const alertRows = [...this.ctx.storage.sql.exec(
         "SELECT id, device_id, alert_type, message, severity, created_at FROM alert_buffer WHERE flushed = 0"
-      );
-      for (const row of alertCursor) {
+      )];
+      for (const row of alertRows) {
         try {
           await this.env.DB.prepare(
             `INSERT INTO alerts (device_id, alert_type, message, severity, created_at)
              VALUES (?1,?2,?3,?4,?5)`
           ).bind(row.device_id, row.alert_type, row.message, row.severity, row.created_at).run();
+          this.ctx.storage.sql.exec(
+            "UPDATE alert_buffer SET flushed = 1 WHERE id = ?", row.id
+          );
         } catch (e) {
           console.error("[alarm] alert insert failed for row", row.id, e);
         }
       }
-      this.ctx.storage.sql.exec(
-        "UPDATE alert_buffer SET flushed = 1 WHERE flushed = 0"
-      );
-      console.log("[alarm] flushed alert_buffer");
+      console.log(`[alarm] flushed ${alertRows.length} alert rows`);
 
       // --- Flush relay_log_buffer → D1 relay_log (Fix 2) ---
-      const relayCursor = this.ctx.storage.sql.exec(
+      const relayRows = [...this.ctx.storage.sql.exec(
         "SELECT id, device_id, command, params_json, status, created_at FROM relay_log_buffer WHERE flushed = 0"
-      );
-      for (const row of relayCursor) {
+      )];
+      for (const row of relayRows) {
         try {
           await this.env.DB.prepare(
             `INSERT INTO relay_log (device_id, command, params_json, status, created_at)
              VALUES (?1,?2,?3,?4,?5)`
           ).bind(row.device_id, row.command, row.params_json, row.status, row.created_at).run();
+          this.ctx.storage.sql.exec(
+            "UPDATE relay_log_buffer SET flushed = 1 WHERE id = ?", row.id
+          );
         } catch (e) {
           console.error("[alarm] relay_log insert failed for row", row.id, e);
         }
       }
-      this.ctx.storage.sql.exec(
-        "UPDATE relay_log_buffer SET flushed = 1 WHERE flushed = 0"
-      );
-      console.log("[alarm] flushed relay_log_buffer");
+      console.log(`[alarm] flushed ${relayRows.length} relay_log rows`);
 
       // --- Update devices.last_seen (Fix 3) ---
       const devices = this.ctx.storage.sql.exec(
@@ -609,9 +647,12 @@ export class DeviceHub extends DurableObject {
       );
       for (const d of devices) {
         try {
+          // `WHERE device_id = ?` never matched anything — the devices table
+          // keys on `id`. And last_seen is epoch SECONDS (the telemetry_buffer
+          // holds epoch ms), so convert.
           await this.env.DB.prepare(
-            "UPDATE devices SET last_seen = ?, status = 'online' WHERE device_id = ?"
-          ).bind(d.last_seen, d.device_id).run();
+            "UPDATE devices SET last_seen = ?, status = 'online' WHERE id = ?"
+          ).bind(Math.floor((d.last_seen ?? 0) / 1000), d.device_id).run();
         } catch (e) {
           console.error("[alarm] device update failed", d.device_id, e);
         }

@@ -1,20 +1,24 @@
--- ─────────────────────────────────────────────────────────────────────────────
+-- ───────────────────────────────────────────────────────────────────
 -- Greeny2 — D1 (`greeny-db`) schema
 --
--- ⚠️ 本檔由**線上 D1 實際結構**產生（2026-10-13），是權威版本。
---    舊版曾寫著 `users.salt` 欄位，但線上根本沒有該欄位 ——
---    照舊版建表會讓 Worker 的登入查詢失敗。請以此檔為準。
+-- ⚠️ 本檔由**線上 D1 實際結構**產生，是權威版本。
+--    舊版曾寫著 `users.salt`（線上根本沒有）與 telemetry 的
+--    `temp` / `led` 欄位（線上叫 `water_temp`、並無 `led`）——
+--    照舊版建表會讓 Worker 的登入查詢與 DO 的 flush 全部失敗。
+--
+--    重點：D1 **會強制引用完整性**（PRAGMA foreign_keys 有效），
+--    telemetry.device_id 必須先存在於 devices.id，否則寫入會被拒絕。
 --
 -- 資料庫：greeny-db  (id 7191a23e-c43b-4962-b3fb-96818ac2d07c)
 -- 套用：  npx wrangler d1 execute greeny-db --remote --file edge/db/schema.sql
 --
 -- 注意：`settings` 表的 `jwt_secret` 與 `device_token` 是**運行時機密**，
---       必須用 `INSERT ... ON CONFLICT` 單獨設定，**不要寫進本檔**。
+--       必須單獨設定，**不要寫進本檔**。
 --
 -- DO-local SQLite（telemetry_buffer / relay_queue / alert_buffer /
 -- device_state / relay_log_buffer）不在本檔 —— 那些由 DeviceHub 的
 -- constructor 自行建立，見 edge/src/device-hub.ts 與 edge/EDGE.md。
--- ─────────────────────────────────────────────────────────────────────────────
+-- ────────────────────────────────────────────────────────────────────
 
 -- alerts
 CREATE TABLE IF NOT EXISTS alerts (
@@ -159,7 +163,7 @@ CREATE TABLE IF NOT EXISTS telemetry (
     water_level REAL NOT NULL DEFAULT 0.0,
     ts_ms INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
-, ndvi REAL NOT NULL DEFAULT 0.0, spectral_red REAL NOT NULL DEFAULT 0.0, spectral_green REAL NOT NULL DEFAULT 0.0, spectral_blue REAL NOT NULL DEFAULT 0.0, spectral_nir REAL NOT NULL DEFAULT 0.0, relay1 INTEGER NOT NULL DEFAULT 0, relay2 INTEGER NOT NULL DEFAULT 0, tds REAL NOT NULL DEFAULT 0.0, ip TEXT NOT NULL DEFAULT '', ap_ssid TEXT NOT NULL DEFAULT '', ap_bssid TEXT NOT NULL DEFAULT '', rssi INTEGER NOT NULL DEFAULT 0);
+, ndvi REAL NOT NULL DEFAULT 0.0, spectral_red REAL NOT NULL DEFAULT 0.0, spectral_green REAL NOT NULL DEFAULT 0.0, spectral_blue REAL NOT NULL DEFAULT 0.0, spectral_nir REAL NOT NULL DEFAULT 0.0, relay1 INTEGER NOT NULL DEFAULT 0, relay2 INTEGER NOT NULL DEFAULT 0, tds REAL NOT NULL DEFAULT 0.0, ip TEXT NOT NULL DEFAULT '', ap_ssid TEXT NOT NULL DEFAULT '', ap_bssid TEXT NOT NULL DEFAULT '', rssi INTEGER NOT NULL DEFAULT 0, esp32_ms INTEGER NOT NULL DEFAULT 0, do_ms INTEGER NOT NULL DEFAULT 0);
 
 -- users
 CREATE TABLE IF NOT EXISTS "users" (
@@ -173,7 +177,7 @@ CREATE TABLE IF NOT EXISTS "users" (
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
--- ── Indexes ──────────────────────────────────────────────────────────────────
+-- ── Indexes ───────────────────────────────────────────────────────────────────
 
 CREATE INDEX IF NOT EXISTS idx_alerts_created ON alerts(created_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_device ON alerts(device_id);
@@ -194,7 +198,7 @@ CREATE INDEX IF NOT EXISTS idx_telemetry_device_ts ON telemetry(device_id, ts_ms
 CREATE INDEX IF NOT EXISTS idx_telemetry_ts ON telemetry(ts_ms);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username);
 
--- ── 必要的 secrets（值不可寫進版控）─────────────────────────────────────────
+-- ── 必要的 secrets（值不可寫進版控）──────────────────────────────────────
 -- INSERT INTO settings (key, value) VALUES ('jwt_secret', '<64 hex>')
 --   ON CONFLICT(key) DO UPDATE SET value = excluded.value;
 -- INSERT INTO settings (key, value) VALUES ('device_token', '<48 hex>')
