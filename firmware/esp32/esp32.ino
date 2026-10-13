@@ -898,7 +898,8 @@ static void exitAPMode() {
 }
 
 // AP 模式主迴圈：服務 portal、每 30 秒試連一次舊 WiFi、逾時則重啟。
-// 回傳 true = WiFi 已連上（可繼續 WSS），false = 永不回傳（直接重啟）。
+// 回傳 true = WiFi 已連上（可繼續 WSS）；回傳 false = 還在 AP 模式（呼叫端繼續等），
+// 只有在逾時時才會 ESP.restart()（不會回傳）。
 static bool runCaptivePortalLoop() {
   static unsigned long lastRetryMs = 0;
 
@@ -1055,17 +1056,17 @@ void setup() {
 
   // Wi-Fi — load credentials from EEPROM or use compiled defaults
   loadWiFiCredentials();
-  startCaptivePortal();               // 先註冊 portal 路由（AP 熱點尚未啟動）
   wifiConnectBlocking();
 
-  // 連不上 → 進 AP 模式讓手機設定；只有在逾時（10 分鐘）才會重啟裝置
+  // 連不上 → 進 AP 模式讓手機設定（正常連上時完全不會啟動熱點）；
+  // 只有在逾時（10 分鐘）時才會重啟裝置，取代原本的無限重開機。
   bool staFirstAttempt = true;
   while (WiFi.status() != WL_CONNECTED) {
     if (!staFirstAttempt) USE_SERIAL.println("WiFi: Still not connected");
     staFirstAttempt = false;
     if (runCaptivePortalLoop()) break;   // 期間連回舊 WiFi → 照原來流程繼續
   }
-  if (inAPMode) exitAPMode();          // 正常連上時 AP 從未啟動，這裡是 no-op
+  if (inAPMode) exitAPMode();          // 連回舊 WiFi 時才需要收掉 AP
 
   // NTP
   syncTime();
