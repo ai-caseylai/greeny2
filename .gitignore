@@ -7,3 +7,4 @@ wifi.env
 device_secrets.h
 device_secrets.py
 build_output/
+__pycache__/
