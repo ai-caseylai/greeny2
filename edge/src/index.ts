@@ -682,19 +682,27 @@ async function handleGetAlerts(
   env: Env
 ): Promise<Response> {
   const deviceId = url.searchParams.get("device_id");
+  const acknowledged = url.searchParams.get("acknowledged");
   const limit = Math.min(parseInt(url.searchParams.get("limit") || "50"), 500);
 
-  let rows;
+  // NOTE: `acknowledged` used to be ignored here, so the SPA's
+  // pending/resolved filter silently had no effect (it passes
+  // ?acknowledged=0|1 through apiFetch, which goes to this Worker, not to
+  // Pages — the Pages implementation did honour the parameter).
+  let sql = "SELECT * FROM alerts WHERE 1=1";
+  const params: (string | number)[] = [];
   if (deviceId) {
-    rows = await env.DB.prepare(
-      "SELECT * FROM alerts WHERE device_id = ? ORDER BY created_at DESC LIMIT ?"
-    ).bind(deviceId, limit).all();
-  } else {
-    rows = await env.DB.prepare(
-      "SELECT * FROM alerts ORDER BY created_at DESC LIMIT ?"
-    ).bind(limit).all();
+    sql += " AND device_id = ?";
+    params.push(deviceId);
   }
+  if (acknowledged !== null && acknowledged !== "") {
+    sql += " AND acknowledged = ?";
+    params.push(parseInt(acknowledged, 10) ? 1 : 0);
+  }
+  sql += " ORDER BY created_at DESC LIMIT ?";
+  params.push(limit);
 
+  const rows = await env.DB.prepare(sql).bind(...params).all();
   return corsJson({ alerts: rows.results });
 }
 

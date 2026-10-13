@@ -115,9 +115,12 @@ export function useAlerts(acknowledged?: number) {
   useEffect(() => { fetchAlerts() }, [fetchAlerts])
 
   const acknowledge = useCallback(async (id: number) => {
-    await apiFetch(`/api/alerts/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ acknowledged: 1 }),
+    // Worker 的警報確認端點是 POST /api/alerts/ack（body: {alert_id}）。
+    // 舊版打 PATCH /api/alerts/<id> —— Worker 沒有那條路由，會回 404，
+    // 等於「確認警報」按鈕完全無效（Pages 側才有 PATCH，但 SPA 走的是 apiFetch → Worker）。
+    await apiFetch('/api/alerts/ack', {
+      method: 'POST',
+      body: JSON.stringify({ alert_id: id }),
     })
     fetchAlerts()
   }, [fetchAlerts])
