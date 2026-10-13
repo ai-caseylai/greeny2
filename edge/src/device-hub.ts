@@ -349,16 +349,20 @@ export class DeviceHub extends DurableObject {
       "ledState", this.ledState ? "1" : "0"
     );
 
-    // Fix 5: deduplicate alerts — fire once per condition, not per telemetry
+    // Deduplicate alerts so one condition does not alert on every telemetry
+    // frame. The old check filtered on `flushed = 0`, which only suppressed
+    // duplicates until the next alarm flush — after that the same condition
+    // alerted again, every 60s, forever. Use a cooldown window instead.
+    const ALERT_COOLDOWN_MS = 30 * 60 * 1000;
     const alerts = this.evaluateAlerts(this.ph, this.ec, this.temp);
     for (const a of alerts) {
-      const existing = this.ctx.storage.sql.exec(
-        "SELECT id FROM alert_buffer WHERE device_id = ? AND alert_type = ? AND flushed = 0 LIMIT 1",
+      const recent = [...this.ctx.storage.sql.exec(
+        "SELECT created_at FROM alert_buffer WHERE device_id = ? AND alert_type = ? ORDER BY id DESC LIMIT 1",
         deviceId, a.type
-      );
-      const rows = [...existing];
-      if (rows.length > 0) {
-        // Already alerted for this condition — skip
+      )];
+      const lastTs = recent.length ? Number(recent[0].created_at) : 0;
+      if (lastTs && now - lastTs < ALERT_COOLDOWN_MS) {
+        // Same condition within the cooldown — skip
         continue;
       }
       this.ctx.storage.sql.exec(
@@ -407,12 +411,21 @@ export class DeviceHub extends DurableObject {
       "ledState", this.ledState ? "1" : "0"
     );
 
+    // The device acknowledged the command — drop it from the durable queue.
+    // Without this, drainRelayQueue() re-sent the same command on the next
+    // telemetry/ping (delivered twice).
+    const ackedCmd = (msg.command as string) || "unknown";
+    this.ctx.storage.sql.exec(
+      "DELETE FROM relay_queue WHERE device_id = ? AND command = ?",
+      deviceId, ackedCmd
+    );
+
     // Fix 2: audit trail — log the acknowledged command
     this.ctx.storage.sql.exec(
       `INSERT INTO relay_log_buffer (device_id, command, params_json, status, created_at)
        VALUES (?, ?, ?, 'acked', ?)`,
       deviceId,
-      (msg.command as string) || "unknown",
+      ackedCmd,
       JSON.stringify({ led: this.ledState, esp32_ms: msg.esp32_ms }),
       now
     );
@@ -507,11 +520,12 @@ export class DeviceHub extends DurableObject {
 
   private drainRelayQueue(deviceId: string) {
     if (!this.esp32ws) return;
-    const cursor = this.ctx.storage.sql.exec(
+    // Collect first — the loop deletes from the table it is reading.
+    const queued = [...this.ctx.storage.sql.exec(
       "SELECT id, command, params_json FROM relay_queue WHERE device_id = ? ORDER BY id ASC",
       deviceId
-    );
-    for (const row of cursor) {
+    )];
+    for (const row of queued) {
       const params = row.params_json
         ? (JSON.parse(row.params_json as string) as Record<string, unknown>)
         : {};
@@ -606,12 +620,34 @@ export class DeviceHub extends DurableObject {
       const alertRows = [...this.ctx.storage.sql.exec(
         "SELECT id, device_id, alert_type, message, severity, created_at FROM alert_buffer WHERE flushed = 0"
       )];
+      // D1 `alerts.type` has a CHECK constraint limited to
+      // ph_abnormal | ec_high | temp_abnormal | do_low | offline | water_low | leak
+      // while evaluateAlerts() produces finer names (ph_low, ph_high, temp_low,
+      // temp_high). Inserting those violated the constraint and every alert
+      // flush failed. Map to the allowed vocabulary here; the precise detail is
+      // still in `message` and in the WebSocket broadcast.
+      const D1_ALERT_TYPE: Record<string, string> = {
+        ph_low: "ph_abnormal",
+        ph_high: "ph_abnormal",
+        temp_low: "temp_abnormal",
+        temp_high: "temp_abnormal",
+        ec_high: "ec_high",
+        offline: "offline",
+      };
       for (const row of alertRows) {
         try {
+          // FK: alerts.device_id REFERENCES devices(id) — same upsert as above.
           await this.env.DB.prepare(
-            `INSERT INTO alerts (device_id, alert_type, message, severity, created_at)
+            `INSERT INTO devices (id, name, floor, location, status, last_seen)
+             VALUES (?1, ?1, 1, '', 'online', ?2)
+             ON CONFLICT(id) DO UPDATE SET status = 'online', last_seen = ?2`
+          ).bind(row.device_id, Math.floor((row.created_at ?? Date.now()) / 1000)).run();
+
+          await this.env.DB.prepare(
+            `INSERT INTO alerts (device_id, type, message, severity, created_at)
              VALUES (?1,?2,?3,?4,?5)`
-          ).bind(row.device_id, row.alert_type, row.message, row.severity, row.created_at).run();
+          ).bind(row.device_id, D1_ALERT_TYPE[row.alert_type] ?? "ph_abnormal",
+                 row.message, row.severity, Math.floor((row.created_at ?? Date.now()) / 1000)).run();
           this.ctx.storage.sql.exec(
             "UPDATE alert_buffer SET flushed = 1 WHERE id = ?", row.id
           );
