@@ -5,9 +5,9 @@ export const onRequest: PagesFunction<Env>[] = [
     const url = new URL(c.request.url);
     const db = c.env.DB;
     const user = c.data.user;
-    const hotelId = user.role === 'admin'
-      ? (parseInt(url.searchParams.get('hotel_id')) || null)
-      : user.hotel_id;
+    const hotelId = user.role === 'superadmin'
+      ? (parseInt((url.searchParams.get('office_id') || url.searchParams.get('hotel_id'))) || null)
+      : user.office_id;
 
     if (c.request.method === 'GET') {
       const status = url.searchParams.get('status');

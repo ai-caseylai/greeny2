@@ -8,3 +8,19 @@ device_secrets.h
 device_secrets.py
 build_output/
 __pycache__/
+
+# Own Cloudflare deployment credentials and generated artifacts
+.greeny2-private.json
+.greeny2-private.json.*.tmp
+.greeny2-build/
+spa/dist/
+
+# Signal linked account, read-only bridge key and local journal
+.greeny2-signal-private.json
+.greeny2-signal-private.json.*.tmp
+.signal-runtime/
+
+# Telegram Bot secrets and temporary local pairing monitor
+.greeny2-telegram-private.json
+.greeny2-telegram-private.json.*.tmp
+.telegram-runtime/

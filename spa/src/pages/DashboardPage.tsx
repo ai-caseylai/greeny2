@@ -1,3 +1,4 @@
+import SampleTime from '../components/SampleTime'
 import { useTranslation } from 'react-i18next'
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useDevices } from '../hooks/useDevices'
@@ -6,6 +7,7 @@ import { useWebSocket } from '../hooks/useWebSocket'
 import { Cpu, Droplets, Thermometer, RefreshCw, Zap, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import { timeAgo } from '../lib/utils'
 import type { Telemetry, Device } from '../types'
+import { isLiveReading, mergeReadings, formatReadingTime } from '../lib/telemetry'
 
 // ── Animated value with micro-transition ──
 function AnimatedValue({ value, prev }: { value: string; prev: string | null }) {
@@ -89,7 +91,7 @@ function Sparkline({ data, dataKey, color, height = 100 }: {
     const pt = points[clamped]
     setTooltip({
       x: tx(clamped), y: ty(pt.y!),
-      value: pt.y!.toFixed(dataKey === 'pH' ? 2 : dataKey === 'Temp' || dataKey === 'EC' ? 1 : 0),
+      value: pt.y!.toFixed(dataKey === 'pH' || dataKey === 'EC' ? 2 : dataKey === 'Temp' ? 1 : 0),
       time: pt.time,
     })
   }
@@ -140,38 +142,19 @@ export default function DashboardPage() {
 
   useEffect(() => { if (initialDevices.length > 0) setDevices(initialDevices) }, [initialDevices])
 
-  // WS: state events
+  // Only timestamped device samples enter the reading history.
   useEffect(() => {
-    return on('state', (msg: any) => {
-      const entry = normalizeReading(msg, 'ws')
-      if (!entry.device_id) return
-      setWsTelemetry(prev => {
-        const rest = prev.filter(t => t.device_id !== entry.device_id)
-        return [entry, ...rest].slice(0, 200)
-      })
-      setLastRefresh(Date.now())
-      if (typeof msg.connected === 'boolean') {
-        setDevices(prev => prev.map(d =>
-          (d.device_id || d.id) === msg.device_id ? { ...d, status: msg.connected ? 'online' : 'offline' } : d
-        ))
-      }
-    })
-  }, [on])
+    const receive=(msg:any)=>{
+      if(typeof msg.connected==='boolean')setDevices(prev=>prev.map(d=>(d.device_id||d.id)===msg.device_id?{...d,status:msg.connected?'online':'offline'}:d))
+      const entry=normalizeReading(msg,'ws')
+      if(!isLiveReading(entry)||!entry.device_id)return
+      setWsTelemetry(prev=>mergeReadings([entry],prev));setLastRefresh(Date.now())
+    }
+    const a=on('state',receive),b=on('telemetry_update',receive)
+    return ()=>{a();b()}
+  },[on])
 
-  // Merge HTTP + WS
-  const telemetry = useMemo(() => {
-    const seen = new Set<string>()
-    const merged: Telemetry[] = []
-    for (const t of wsTelemetry) {
-      const key = `${t.device_id}-${t.ts_ms}`
-      if (!seen.has(key)) { seen.add(key); merged.push(t) }
-    }
-    for (const t of initialTelemetry) {
-      const key = `${t.device_id}-${t.ts_ms}`
-      if (!seen.has(key)) { seen.add(key); merged.push(t) }
-    }
-    return merged.slice(0, 200)
-  }, [initialTelemetry, wsTelemetry])
+  const telemetry=useMemo(()=>mergeReadings(wsTelemetry,initialTelemetry),[initialTelemetry,wsTelemetry])
 
   // Track previous telemetry for trend comparison
   useEffect(() => {
@@ -202,24 +185,24 @@ export default function DashboardPage() {
   const latestTelemetry = telemetry.length > 0 ? telemetry[0] : null
   const onlineCount = devices.filter(d => d.status === 'online').length
   const totalDevices = devices.length
-  const esp32Uptime = latestTelemetry?.ts_ms ? Math.floor(latestTelemetry.ts_ms / 1000) : null
+  const esp32Uptime = latestTelemetry?.esp32_ms != null ? Math.floor(latestTelemetry.esp32_ms / 1000) : null
 
   const kpiCards = [
     { label: t('dashboard.onlineDevices'), valueStr: `${onlineCount}/${totalDevices}`, valueNum: null, icon: Cpu, color: '#4CAF50', unit: '' },
     { label: t('dashboard.avgPh'), valueStr: latestTelemetry?.ph != null ? latestTelemetry.ph.toFixed(2) : '-', valueNum: latestTelemetry?.ph ?? null, icon: Droplets, color: '#2196F3', unit: '' },
     { label: t('dashboard.avgTemp'), valueStr: latestTelemetry?.water_temp != null ? `${latestTelemetry.water_temp.toFixed(1)}°C` : '-', valueNum: latestTelemetry?.water_temp ?? null, icon: Thermometer, color: '#E91E63', unit: '°C' },
-    { label: t('dashboard.tds'), valueStr: latestTelemetry?.tds != null ? `${Math.round(latestTelemetry.tds)} ppm` : (latestTelemetry?.ec != null ? `${Math.round(latestTelemetry.ec)} ppm` : '-'), valueNum: latestTelemetry?.tds ?? latestTelemetry?.ec ?? null, icon: Zap, color: '#FF9800', unit: 'ppm' },
-    { label: t('dashboard.ec'), valueStr: latestTelemetry?.ec != null ? `${latestTelemetry.ec.toFixed(1)} µS/cm` : '-', valueNum: latestTelemetry?.ec ?? null, icon: TrendingUp, color: '#4CAF50', unit: 'µS/cm' },
+    { label: t('dashboard.tds'), valueStr: latestTelemetry?.tds != null ? `${Math.round(latestTelemetry.tds)} ppm` : '未提供', valueNum: latestTelemetry?.tds ?? null, icon: Zap, color: '#FF9800', unit: 'ppm' },
+    { label: t('dashboard.ec'), valueStr: latestTelemetry?.ec != null ? `${latestTelemetry.ec.toFixed(2)} µS/cm` : '-', valueNum: latestTelemetry?.ec ?? null, icon: TrendingUp, color: '#4CAF50', unit: 'µS/cm' },
   ]
 
   const sparkData = useMemo(() => {
     const last50 = [...telemetry].slice(0, 50).reverse()
     return last50.map(t => ({
-      time: new Date(t.ts_ms ?? (t.created_at * 1000)).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }),
+      time: formatReadingTime(t),
       pH: t.ph != null ? Number(t.ph.toFixed(2)) : null,
       Temp: t.water_temp != null ? Number(t.water_temp.toFixed(1)) : null,
-      TDS: t.tds != null ? Math.round(t.tds) : (t.ec != null ? Math.round(t.ec) : null),
-      EC: t.ec != null ? Number(t.ec.toFixed(1)) : null,
+      TDS: t.tds != null ? Math.round(t.tds) : null,
+      EC: t.ec != null ? Number(t.ec.toFixed(2)) : null,
     }))
   }, [telemetry])
 
@@ -256,9 +239,9 @@ export default function DashboardPage() {
         <span className="text-gray-300">·</span>
         <span>{firstDeviceId || '—'}</span>
         <span className="text-gray-300">·</span>
-        <span>Uptime {esp32Uptime != null ? `${Math.floor(esp32Uptime / 1000)}s` : '—'}</span>
+        <span>Uptime {esp32Uptime != null ? `${esp32Uptime}s` : '—'}</span>
         <span className="text-gray-300">·</span>
-        <span>Updated {timeAgo(lastRefresh)}</span>
+        <SampleTime reading={latestTelemetry} />
         <span className="text-gray-300">·</span>
         <span>{telemetry.length} readings</span>
       </div>
@@ -284,7 +267,7 @@ export default function DashboardPage() {
                       previous={
                         card.label === 'pH Level' ? prevTelemetry.ph :
                         card.label === 'Temperature' ? prevTelemetry.water_temp :
-                        card.label === 'TDS' ? (prevTelemetry.tds ?? prevTelemetry.ec) :
+                        card.label === 'TDS' ? prevTelemetry.tds :
                         card.label === 'EC' ? prevTelemetry.ec :
                         null
                       }
@@ -358,8 +341,8 @@ export default function DashboardPage() {
                     <td className="px-4 py-3 font-medium text-gray-900">{d.name}</td>
                     <td className="px-4 py-3">{lt?.ph?.toFixed(2) || '-'}</td>
                     <td className="px-4 py-3">{lt?.water_temp?.toFixed(1) || '-'}°C</td>
-                    <td className="px-4 py-3">{lt?.tds != null ? Math.round(lt.tds) : (lt?.ec != null ? Math.round(lt.ec) : '-')} ppm</td>
-                    <td className="px-4 py-3">{lt?.ec?.toFixed(1) || '-'}</td>
+                    <td className="px-4 py-3">{lt?.tds != null ? Math.round(lt.tds) : '未提供'} ppm</td>
+                    <td className="px-4 py-3">{lt?.ec?.toFixed(2) || '-'}</td>
                     <td className="px-4 py-3">
                       <span className="flex items-center gap-1.5">
                         <span className={`h-2 w-2 rounded-full ${statusColors[d.status] || 'bg-gray-400'}`} />{statusLabels[d.status] || d.status}

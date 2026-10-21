@@ -1,8 +1,11 @@
+import SampleTime from '../components/SampleTime'
 import { useTranslation } from 'react-i18next'
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useDevices } from '../hooks/useDevices'
 import { useTelemetry } from '../hooks/useSensorData'
 import { useWebSocket } from '../hooks/useWebSocket'
+import type { RelayChannel } from '../hooks/useWebSocket'
+import { normalizeReading, isLiveReading } from '../lib/telemetry'
 import { Search, Droplets, Zap, Thermometer, Wifi, WifiOff, ToggleLeft, ToggleRight } from 'lucide-react'
 import { timeAgo } from '../lib/utils'
 
@@ -74,106 +77,58 @@ export default function DeviceControlPage() {
 function DeviceCard({ device: d, telemetry }: { device: any; telemetry: any[] }) {
   const { t } = useTranslation()
   const deviceId = d.device_id || d.id
-  const { connected: wsConnected, ledState, toggleLed } = useWebSocket(deviceId)
-  const latestT = telemetry.find((t: any) => t.device_id === deviceId)
-
-  // LED state precedence: WS live > telemetry polling > off
-  const ledOn = ledState !== null
-    ? ledState
-    : (latestT?.led === 1 || latestT?.led === true)
-
-  const [toggling, setToggling] = useState(false)
-
-  const handleToggle = async () => {
-    setToggling(true)
-    await toggleLed(deviceId, !ledOn)
-    setToggling(false)
-  }
-
-    const statusLabel = d.status === 'online' ? t('deviceControl.online') : d.status === 'offline' ? t('deviceControl.offline') :
-    d.status === 'warning' ? t('deviceControl.warning') : d.status === 'alarm' ? t('deviceControl.alarm') :
-    d.status === 'maintenance' ? t('deviceControl.maintenance') : d.status
-
+  const { connected:wsConnected,deviceConnected,reportedRelays,relayValid,pendingRelays,relayCommands,liveReading,canControl,setRelay }=useWebSocket(deviceId)
+  const [actionError,setActionError]=useState<string|null>(null)
+  const received=useMemo(()=>liveReading ? normalizeReading(liveReading,'ws') : null,[liveReading])
+  const latestT=received && isLiveReading(received) ? received : telemetry.find(row=>row.device_id===deviceId)
+  const online=wsConnected && deviceConnected
+  const status=online?'online':'offline'
+  const command=async (channel:RelayChannel,state:boolean)=>{setActionError(null);try{await setRelay(channel,state)}catch(err){setActionError(err instanceof Error?err.message:'未能送出指令')}}
   return (
-    <div className={`rounded-xl border p-5 shadow-sm transition-all hover:shadow-md ${statusBgColors[d.status] || 'border-border bg-white'}`}>
-      {/* Header */}
+    <div className={'rounded-xl border p-5 shadow-sm transition-all hover:shadow-md '+statusBgColors[status]}>
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
-          <span className={`h-2.5 w-2.5 rounded-full ${statusDotColors[d.status] || 'bg-gray-400'}`} />
-          <div>
-            <p className="font-semibold text-gray-900">{d.name}</p>
-            <p className="text-xs text-gray-400">{d.device_id || d.id}</p>
-          </div>
+          <span className={'h-2.5 w-2.5 rounded-full '+statusDotColors[status]} />
+          <div><p className="font-semibold text-gray-900">{d.name}</p><p className="text-xs text-gray-400">{deviceId}</p></div>
         </div>
-        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-          d.status === 'online' ? 'bg-green-100 text-green-700' :
-          d.status === 'warning' || d.status === 'alarm' ? 'bg-amber-100 text-amber-700' :
-          d.status === 'maintenance' ? 'bg-blue-100 text-blue-700' :
-          'bg-gray-100 text-gray-700'
-        }`}>
-          {statusLabel}
-        </span>
+        <span className={'rounded-full px-2 py-0.5 text-xs font-medium '+(online?'bg-green-100 text-green-700':'bg-gray-100 text-gray-700')}>{online?t('deviceControl.online'):t('deviceControl.offline')}</span>
       </div>
-
-      {/* Sensor readings */}
-      {latestT && (
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          <div className="flex items-center gap-2">
-            <Droplets className="h-3.5 w-3.5 text-blue-500" />
-            <div>
-              <p className="text-[10px] text-gray-400">pH</p>
-              <p className="text-sm font-medium">{latestT.ph?.toFixed(2) ?? '-'}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Zap className="h-3.5 w-3.5 text-green-500" />
-            <div>
-              <p className="text-[10px] text-gray-400">TDS</p>
-              <p className="text-sm font-medium">{latestT.tds != null ? Math.round(latestT.tds) : (latestT.ec != null ? Math.round(latestT.ec) : '-')} ppm</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Thermometer className="h-3.5 w-3.5 text-pink-500" />
-            <div>
-              <p className="text-[10px] text-gray-400">Temp</p>
-              <p className="text-sm font-medium">{latestT.water_temp?.toFixed(1) ?? '-'}°C</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Zap className="h-3.5 w-3.5 text-yellow-500" />
-            <div>
-              <p className="text-[10px] text-gray-400">EC</p>
-              <p className="text-sm font-medium">{latestT.ec?.toFixed(1) ?? '-'}</p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* LED Toggle */}
-      <div className="flex items-center justify-between pt-3 border-t border-border/50">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleToggle}
-            disabled={toggling}
-            className={`flex items-center gap-1.5 text-xs transition-opacity ${toggling ? 'opacity-50' : ''}`}
-          >
-            {ledOn
-              ? <ToggleRight className="h-5 w-5 text-[#00a65a]" />
-              : <ToggleLeft className="h-5 w-5 text-gray-400" />
-            }
-            <span className={ledOn ? 'text-[#00a65a] font-medium' : 'text-gray-500'}>{t('deviceControl.led')}</span>
-          </button>
-          <span className={`h-1.5 w-1.5 rounded-full ${ledOn ? 'bg-[#00a65a] animate-pulse' : 'bg-gray-300'}`} />
-        </div>
-        <span className={`flex items-center gap-1 text-[10px] ${wsConnected ? 'text-green-600' : 'text-gray-400'}`}>
-          {wsConnected ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
-          {wsConnected ? t('deviceControl.live') : t('deviceControl.polling')}
-        </span>
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        <div className="flex items-center gap-2"><Droplets className="h-3.5 w-3.5 text-blue-500"/><div><p className="text-[10px] text-gray-400">pH</p><p className="text-sm font-medium">{latestT?.ph?.toFixed(2) ?? '—'}</p></div></div>
+        <div className="flex items-center gap-2"><Zap className="h-3.5 w-3.5 text-green-500"/><div><p className="text-[10px] text-gray-400">EC · µS/cm</p><p className="text-sm font-medium">{latestT?.ec?.toFixed(2) ?? '—'}</p></div></div>
+        <div className="flex items-center gap-2"><Thermometer className="h-3.5 w-3.5 text-pink-500"/><div><p className="text-[10px] text-gray-400">溫度</p><p className="text-sm font-medium">{latestT?.water_temp?.toFixed(1) ?? '—'} °C</p></div></div>
+        <div><p className="text-[10px] text-gray-400">TDS · ppm</p><p className="text-sm font-medium">{latestT?.tds!=null?latestT.tds.toFixed(2):'未提供'}</p></div>
       </div>
-
-      {/* Footer */}
-      <div className="flex items-center justify-between pt-2 text-[10px] text-gray-400">
-        <span>{d.last_seen ? timeAgo(d.last_seen) : t('common.never')}</span>
+      <p className="mb-3 text-[10px] text-gray-500 break-words"><SampleTime reading={latestT} /></p>
+      <div className="border-t border-border/50 pt-2 space-y-2">
+        {([1,2,3,4] as RelayChannel[]).map(channel=>{
+          const actual=reportedRelays[channel-1]
+          const local=relayCommands[channel]
+          const server=pendingRelays.find(p=>p.channel===channel)
+          const pending=local?.status==='pending'||!!server
+          const disabled=!canControl||!online||!relayValid||typeof actual!=='boolean'||pending
+          const desired=local?.status==='pending'?local.state:server?.state
+          return <div key={channel} className="space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-gray-600">繼電器 {channel} · Relay {channel}</span>
+              <button type="button" role="switch" aria-label={'繼電器 '+channel} aria-checked={actual===true} disabled={disabled}
+                onClick={()=>{if(typeof actual==='boolean')void command(channel,!actual)}}
+                className="flex items-center gap-1 text-xs disabled:opacity-50 disabled:cursor-not-allowed">
+                {actual===true?<ToggleRight className="h-6 w-6 text-[#00a65a]"/>:<ToggleLeft className="h-6 w-6 text-gray-400"/>}
+                {actual===null?'未知':actual?'開':'關'}
+              </button>
+            </div>
+            <p aria-live="polite" className={'text-[10px] '+(local?.status==='error'?'text-red-600':pending?'text-amber-700':'text-gray-400')}>
+              {pending?'等待裝置確認（目標：'+(desired?'開':'關')+'）':local?.message || (!relayValid?'等待有效輸出回報':'裝置輸出回讀')}
+            </p>
+          </div>
+        })}
+      </div>
+      {!canControl && <p className="mt-3 text-xs text-gray-500">此帳號只可查看。</p>}
+      {actionError && <p role="alert" className="mt-3 text-xs text-red-600">{actionError}</p>}
+      <div className="flex items-center justify-between pt-3 text-[10px] text-gray-400">
+        <span className={'flex items-center gap-1 '+(wsConnected?'text-green-600':'')}>{wsConnected?<Wifi className="h-3 w-3"/>:<WifiOff className="h-3 w-3"/>}{wsConnected?'Cloud 已連線':'Cloud 未連線'}</span>
+        <span>{d.last_seen?timeAgo(d.last_seen):t('common.never')}</span>
       </div>
     </div>
   )

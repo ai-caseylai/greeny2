@@ -5,9 +5,9 @@ export const onRequest: PagesFunction<Env>[] = [
     const db = c.env.DB;
     const url = new URL(c.request.url);
     const user = c.data.user;
-    const hotelId = user.role === 'admin'
-      ? (parseInt(url.searchParams.get('hotel_id')) || null)
-      : user.hotel_id;
+    const hotelId = user.role === 'superadmin'
+      ? (parseInt((url.searchParams.get('office_id') || url.searchParams.get('hotel_id'))) || null)
+      : user.office_id;
 
     if (c.request.method === 'GET') {
       let query = `SELECT f.*, d.name as device_name, d.floor,
@@ -16,7 +16,7 @@ export const onRequest: PagesFunction<Env>[] = [
        FROM filters f LEFT JOIN devices d ON f.device_id = d.id
        WHERE f.status = 'active'`;
       const params: unknown[] = [];
-      if (hotelId) { query += ' AND d.hotel_id = ?'; params.push(hotelId); }
+      if (hotelId) { query += ' AND EXISTS(SELECT 1 FROM racks own_rack WHERE own_rack.device_id=d.id AND own_rack.office_id=?)'; params.push(hotelId); }
       query += ' ORDER BY days_remaining ASC';
 
       const result = await db.prepare(query).bind(...params).all();
@@ -29,7 +29,7 @@ export const onRequest: PagesFunction<Env>[] = [
       const recordHotelId = hotelId || 1;
 
       if (hotelId) {
-        const device = await db.prepare('SELECT hotel_id FROM devices WHERE id = ?').bind(body.device_id).first<{ hotel_id: number }>();
+        const device = await db.prepare('SELECT office_id AS hotel_id FROM racks WHERE device_id = ? LIMIT 1').bind(body.device_id).first<{ hotel_id: number }>();
         if (!device || device.hotel_id !== hotelId) {
           return new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
         }

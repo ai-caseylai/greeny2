@@ -39,7 +39,7 @@
     "sensors": "感測器",
     "monitoring": "監控",
     "parameters": "參數",
-    "domain": "greeny.techforliving.net",
+    "domain": "greeny2.openezit.com",
     "welcomeBack": "歡迎回來",
     "signIn": "登入您的儀表板",
     "username": "使用者名稱",
@@ -176,7 +176,7 @@
     "askMe": "詢問您的植物狀況",
     "howPlants": "植物狀況如何？",
     "anyAlerts": "有任何警報嗎？",
-    "turnOnLed": "開啟 LED",
+    "latestReadings": "最新 pH、EC 及溫度是多少？",
     "sorry": "抱歉，我無法處理該請求。",
     "networkError": "網路錯誤 — 請重試。"
   },

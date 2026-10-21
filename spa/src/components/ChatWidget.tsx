@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { useState, useRef, useEffect, type FormEvent, type KeyboardEvent } from 'react'
 import { MessageCircle, Send, X, Loader2 } from 'lucide-react'
-import { getToken } from '../lib/api'
+import { apiFetch } from '../lib/api'
 
 interface Message {
   role: 'user' | 'agent'
@@ -15,7 +15,7 @@ export function ChatWidget() {
   const EXAMPLE_PROMPTS = [
     t('chat.howPlants'),
     t('chat.anyAlerts'),
-    t('chat.turnOnLed'),
+    t('chat.latestReadings'),
   ]
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
@@ -44,16 +44,10 @@ export function ChatWidget() {
     setLoading(true)
 
     try {
-      const token = getToken()
-      const res = await fetch('https://iot-hub.ai-caseylai.workers.dev/api/chat', {
+      const data = await apiFetch<{ reply?: string }>('/api/chat', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
         body: JSON.stringify({ message: trimmed }),
       })
-      const data = await res.json()
       const agentMsg: Message = { role: 'agent', text: data.reply || t('chat.sorry') }
       setMessages(prev => [...prev, agentMsg])
     } catch {

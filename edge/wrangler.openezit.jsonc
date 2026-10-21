@@ -1,0 +1,81 @@
+// Own-account deployment. Telegram uses the Free-plan compatible SQLite Durable Object.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "greeny2",
+  "account_id": "3df8aa5f7718e535dfb690343b98e986",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-12-01",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": true,
+  "preview_urls": false,
+  "send_metrics": false,
+  "routes": [
+    {
+      "pattern": "greeny2.openezit.com",
+      "custom_domain": true,
+      "zone_id": "3ab61e2584b0f7a86b9d40b153683762"
+    }
+  ],
+  "assets": {
+    "directory": "../spa/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/api/*",
+      "/device/*",
+      "/dashboard/*",
+      "/health"
+    ]
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "DEVICE_HUB",
+        "class_name": "DeviceHub"
+      },
+      {
+        "name": "GREENY_AGENT",
+        "class_name": "GreenyAgent"
+      },
+      {
+        "name": "TELEGRAM_HUB",
+        "class_name": "TelegramHub"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "DeviceHub"
+      ]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": [
+        "GreenyAgent"
+      ]
+    },
+    {
+      "tag": "v3-telegram",
+      "new_sqlite_classes": [
+        "TelegramHub"
+      ]
+    }
+  ],
+  "ai": {
+    "binding": "AI"
+  },
+  "vars": {
+    "AI_MODEL": "@cf/meta/llama-3.1-8b-instruct-fp8-fast"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "greeny2-db",
+      "database_id": "00000000-0000-4000-8000-000000000000"
+    }
+  ]
+}

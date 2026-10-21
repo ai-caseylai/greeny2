@@ -1,857 +1,121 @@
-/**
- * IoT Hub — Worker (Phase 3: Auth + REST API)
- *
- * Routes:
- *   GET  /                  → Dashboard HTML
- *   GET  /health            → Health check
- *   POST /api/auth/login    → JWT login (no auth required)
- *   GET  /api/auth/me       → Current user info (JWT required)
- *   GET  /api/telemetry     → Query D1 telemetry (JWT required)
- *   GET  /api/devices       → Device list + status (JWT required)
- *   GET  /api/alerts        → Alert list (JWT required)
- *   POST /api/alerts/ack    → Acknowledge alert (JWT required)
- *   POST /api/chat          → AI agent chat (JWT required)
- *   GET  /device/:id        → WebSocket upgrade → DO
- *   GET  /dashboard/:id     → WebSocket upgrade → DO
- */
 
-import { DeviceHub } from "./device-hub";
-import { GreenyAgent } from "./agent";
-import { signJWT, verifyJWT, verifyPassword } from "./auth";
-
-// ── JWT Secret Cache ──────────────────────────────────────────────────────
-
-let cachedJWTSecret: string | null = null;
-
-async function getJWTSecret(env: Env): Promise<string> {
-  if (cachedJWTSecret) return cachedJWTSecret;
-  const row = await env.DB.prepare(
-    "SELECT value FROM settings WHERE key = 'jwt_secret'"
-  ).first<{ value: string }>();
-  if (row) cachedJWTSecret = row.value;
-  return cachedJWTSecret ?? "";
+import {DeviceHub} from './device-hub';
+import {GreenyAgent} from './agent';
+import {signJWT,verifyPassword} from './auth';
+import {setting,currentUser,bearer,ownsDevice,deviceScope,isReadOnlyRequest,smallJSON,json} from './access';
+import {DEVICE_ID_RE,relayRequest,type User} from './stamplc-protocol';
+import {managementAPI} from './pages-adapter';
+import {signalQuery,signalStatus,configureSignal} from './signal';
+import {TelegramHub,telegramWebhook} from './telegram';
+export interface Env {DB:D1Database;DEVICE_HUB:DurableObjectNamespace<DeviceHub>;GREENY_AGENT:DurableObjectNamespace<GreenyAgent>;AI:Ai;AI_MODEL?:string;ASSETS?:Fetcher;TELEGRAM_HUB:DurableObjectNamespace<TelegramHub>;TELEGRAM_BOT_TOKEN?:string;TELEGRAM_WEBHOOK_SECRET?:string;WORKBUDDY_API_URL?:string;WORKBUDDY_API_KEY?:string;WB_API_KEY?:string;}
+function hub(env:Env,id:string){return env.DEVICE_HUB.get(env.DEVICE_HUB.idFromName(id));}
+async function login(request:Request,env:Env){
+  let body:any;try{body=await smallJSON(request);}catch{return json({error:'Invalid JSON'},400);}
+  if(typeof body.username!=='string'||typeof body.password!=='string'||!body.username||!body.password)return json({error:'Username and password required'},400);
+  const secret=await setting(env,'jwt_secret');if(secret.length<32)return json({error:'Server has not been initialized'},503);
+  const row=await env.DB.prepare('SELECT id,username,password_hash,role,office_id,display_name FROM users WHERE username=? AND active=1').bind(body.username).first<any>();
+  if(!row||!(await verifyPassword(body.password,row.password_hash)))return json({error:'Invalid credentials'},401);
+  const user={id:row.id,username:row.username,role:row.role,office_id:row.office_id??null,display_name:row.display_name};
+  const token=await signJWT({sub:row.id,...user,iat:Math.floor(Date.now()/1000)},secret);
+  return json({token,user});
 }
-
-// ── Device token (for /device/:id WebSocket) ───────────────────────────────
-// Devices authenticate with ?token=<device_token> where the value lives in the
-// D1 `settings` table (key = `device_token`). Set one to enforce; if the row is
-// absent the device channel stays open so a fleet can be migrated gradually.
-
-let cachedDeviceToken: string | null = null;
-
-async function getDeviceToken(env: Env): Promise<string> {
-  if (cachedDeviceToken !== null) return cachedDeviceToken;
-  const row = await env.DB.prepare(
-    "SELECT value FROM settings WHERE key = 'device_token'"
-  ).first<{ value: string }>();
-  cachedDeviceToken = row?.value ?? "";
-  return cachedDeviceToken;
+async function devices(env:Env,user:User){
+  const scope=deviceScope(user,'d.id');const rows=await env.DB.prepare('SELECT d.* FROM devices d WHERE '+scope.clause+' ORDER BY d.id').bind(...scope.params).all<any>();
+  const out=await Promise.all(rows.results.map(async row=>{try{const response=await hub(env,row.id).fetch('https://device-hub/state?device_id='+encodeURIComponent(row.id));const live=await response.json<any>();return {...row,...live,id:row.id,device_id:row.id,name:row.name,status:live.connected?'online':'offline'};}catch{return {...row,device_id:row.id,status:'unknown',connected:false,relay_valid:false};}}));
+  return json({devices:out});
 }
-
-// ── JWT Middleware ────────────────────────────────────────────────────────
-// Whitelist: paths that skip auth
-
-const AUTH_WHITELIST = new Set([
-  "GET:/",
-  "GET:/dashboard",
-  "GET:/health",
-  "POST:/api/auth/login",
-]);
-
-function needsAuth(method: string, path: string): boolean {
-  // WebSocket upgrade paths: browsers cannot set Authorization headers,
-  // so token is passed as ?token= query param. Skip header-based auth.
-  if (path.startsWith("/device/") || path.startsWith("/dashboard/")) return false;
-  return !AUTH_WHITELIST.has(`${method}:${path}`);
+async function telemetry(url:URL,env:Env,user:User){
+  const id=url.searchParams.get('device_id');if(id&&!(await ownsDevice(env,user,id)))return json({error:'Forbidden'},403);
+  const scope=deviceScope(user,'t.device_id'),limit=Math.max(1,Math.min(1000,Number(url.searchParams.get('limit'))||100));
+  const params:any[]=[...scope.params];let where=scope.clause;if(id){where+=' AND t.device_id=?';params.push(id);}params.push(limit);
+  const result=await env.DB.prepare('SELECT t.*,t.water_temp AS temp,t.received_ms AS received_ms FROM telemetry t WHERE '+where+' ORDER BY COALESCE(t.utc_ms,t.ts_ms,t.created_at*1000) DESC,t.id DESC LIMIT ?').bind(...params).all<any>();
+  return json({telemetry:result.results.map(row=>{let relays=null;try{relays=row.relays_json?JSON.parse(row.relays_json):null;}catch{}return {...row,relays,reported_relays:relays,relay_valid:row.relay_valid===1};})});
 }
-
-async function authenticate(
-  request: Request,
-  env: Env
-): Promise<Record<string, unknown> | null> {
-  const authHeader = request.headers.get("Authorization");
-  if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
-
-  const token = authHeader.slice(7);
-  const secret = await getJWTSecret(env);
-  if (!secret) return null;
-
-  return verifyJWT(token, secret);
+async function alerts(url:URL,env:Env,user:User){
+  const id=url.searchParams.get('device_id');if(id&&!(await ownsDevice(env,user,id)))return json({error:'Forbidden'},403);
+  const scope=deviceScope(user,'a.device_id'),params:any[]=[...scope.params];let where=scope.clause;
+  if(id){where+=' AND a.device_id=?';params.push(id);}if(['0','1'].includes(url.searchParams.get('acknowledged')||'')){where+=' AND a.acknowledged=?';params.push(Number(url.searchParams.get('acknowledged')));}
+  params.push(Math.max(1,Math.min(500,Number(url.searchParams.get('limit'))||50)));
+  const result=await env.DB.prepare('SELECT a.* FROM alerts a WHERE '+where+' ORDER BY a.created_at DESC,a.id DESC LIMIT ?').bind(...params).all();return json({alerts:result.results});
 }
-
-// ── Dashboard HTML (Phase 3: unchanged, Phase 4 will enhance) ─────────────
-
-const DASHBOARD_HTML = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Greeny — Smart Hydroponics</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: #0f172a; color: #e2e8f0;
-    display: flex; justify-content: center; align-items: center;
-    min-height: 100vh; padding: 16px;
-  }
-  .card {
-    background: #1e293b; border-radius: 16px; padding: 28px;
-    width: 100%; max-width: 440px;
-    box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
-  }
-  .title { font-size: 1.1rem; color: #94a3b8; margin-bottom: 2px; }
-  .device { font-size: 1.4rem; font-weight: 700; margin-bottom: 12px; }
-
-  /* Status dot + connection */
-  .status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; font-size: 0.9rem; }
-  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; transition: all 0.3s; }
-  .dot-on    { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
-  .dot-stale { background: #f59e0b; box-shadow: 0 0 8px #f59e0b; animation: pulse 2s infinite; }
-  .dot-off   { background: #ef4444; box-shadow: 0 0 8px #ef4444; }
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-
-  /* LED toggle switch (Fix 5) */
-  .led-row { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
-  .led-circle {
-    width: 56px; height: 56px; border-radius: 50%; border: 3px solid #334155;
-    transition: all 0.3s ease; flex-shrink: 0;
-  }
-  .led-circle.on {
-    background: #eab308; border-color: #facc15;
-    box-shadow: 0 0 30px rgba(234,179,8,0.6), 0 0 60px rgba(234,179,8,0.3);
-  }
-  .led-circle.off { background: #1e293b; border-color: #334155; box-shadow: none; }
-  .toggle { position: relative; display: inline-block; width: 48px; height: 26px; flex-shrink: 0; }
-  .toggle input { opacity: 0; width: 0; height: 0; }
-  .toggle-slider { position: absolute; cursor: pointer; top:0;left:0;right:0;bottom:0; background:#334155; border-radius:26px; transition:0.3s; }
-  .toggle-slider:before { position:absolute; content:""; height:18px; width:18px; left:4px; bottom:4px; background:white; border-radius:50%; transition:0.3s; }
-  input:checked + .toggle-slider { background: #eab308; }
-  input:checked + .toggle-slider:before { transform: translateX(22px); }
-  .led-label { font-size: 1rem; color: #94a3b8; }
-
-  /* RTT + last updated */
-  .meta-row { display: flex; justify-content: space-between; font-size: 0.8rem; color: #64748b; margin-bottom: 14px; }
-  .meta-row span { color: #22d3ee; font-weight: 600; }
-
-  /* Sensor gauge arcs (Fix 10) */
-  .gauges { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
-  .gauge { position: relative; width: 100%; aspect-ratio: 1; max-width: 140px; margin: 0 auto; }
-  .gauge-arc {
-    width: 100%; height: 100%; border-radius: 50%;
-    position: relative; overflow: hidden;
-  }
-  .gauge-bg {
-    position: absolute; inset: 0; border-radius: 50%;
-    background: conic-gradient(
-      #22c55e 0deg var(--gauge-pct, 0deg),
-      #334155 var(--gauge-pct, 0deg) 360deg
-    );
-  }
-  .gauge-center {
-    position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
-    width: 70%; height: 70%; border-radius: 50%; background: #0f172a;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-  }
-  .gauge-value { font-size: 1.2rem; font-weight: 700; line-height: 1; }
-  .gauge-value.sensor-normal  { color: #22c55e; }
-  .gauge-value.sensor-warning { color: #f59e0b; }
-  .gauge-value.sensor-danger  { color: #ef4444; }
-  .gauge-unit  { font-size: 0.65rem; color: #64748b; margin-top: 2px; }
-  .gauge-label { text-align: center; font-size: 0.68rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
-
-  /* Device info (Fix 9) */
-  .device-info { font-size: 0.72rem; color: #475569; text-align: center; margin-bottom: 12px; min-height: 16px; }
-
-  /* Toast container (Fix 7) */
-  #toastContainer { position: fixed; top: 16px; right: 16px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; max-width: 340px; }
-  .toast { padding: 10px 14px; border-radius: 8px; color: #fff; font-size: 0.82rem; animation: slideIn 0.3s ease; display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
-  .toast-warning  { background: #b45309; }
-  .toast-critical { background: #dc2626; }
-  .toast-msg { flex: 1; }
-  .toast-close { cursor: pointer; font-size: 1rem; opacity: 0.7; line-height: 1; }
-  .toast-close:hover { opacity: 1; }
-  @keyframes slideIn  { from { transform: translateX(120%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-  @keyframes slideOut { from { transform: translateX(0); opacity: 1; } to { transform: translateX(120%); opacity: 0; } }
-
-  /* Login */
-  .login-box { text-align: center; }
-  .login-box input {
-    width: 100%; padding: 12px; margin-bottom: 10px; border-radius: 8px;
-    border: 1px solid #334155; background: #0f172a; color: #e2e8f0; font-size: 1rem;
-  }
-  .login-box input:focus { outline: none; border-color: #3b82f6; }
-  .login-box button {
-    width: 100%; padding: 12px; border-radius: 8px; border: none;
-    font-size: 1rem; font-weight: 600; cursor: pointer; background: #3b82f6; color: #fff;
-  }
-  .login-box button:hover { background: #2563eb; }
-  .login-error { color: #fca5a5; font-size: 0.85rem; margin-top: 8px; min-height: 20px; }
-  .logout-link { font-size: 0.8rem; color: #64748b; cursor: pointer; text-align: right; margin-bottom: 8px; }
-  .logout-link:hover { color: #ef4444; }
-
-  /* Device selector */
-  .device-select {
-    width: 100%; padding: 8px 12px; margin-bottom: 12px; border-radius: 8px;
-    border: 1px solid #334155; background: #0f172a; color: #e2e8f0; font-size: 0.95rem;
-  }
-
-  /* Log */
-  .log {
-    margin-top: 14px; padding: 10px; background: #0f172a; border-radius: 8px;
-    font-family: 'Courier New', monospace; font-size: 0.72rem; color: #64748b;
-    max-height: 140px; overflow-y: auto;
-  }
-  .log .line { padding: 2px 0; border-bottom: 1px solid #1e293b; }
-  .log .line:last-child { border-bottom: none; }
-</style>
-</head>
-<body>
-
-<!-- Toast container -->
-<div id="toastContainer"></div>
-
-<!-- Login Panel -->
-<div class="card login-box" id="loginBox">
-  <div class="title">Greeny IoT Hub</div>
-  <div class="device" style="margin-bottom:24px">Login</div>
-  <input id="username" type="text" placeholder="Username" autocomplete="username" />
-  <input id="password" type="password" placeholder="Password" autocomplete="current-password" />
-  <button id="btnLogin">Sign In</button>
-  <div class="login-error" id="loginError"></div>
-</div>
-
-<!-- Dashboard Panel -->
-<div class="card" id="dashboardBox" style="display:none">
-  <div class="logout-link" id="btnLogout">Logout</div>
-  <div class="title">Device Dashboard</div>
-  <select class="device-select" id="deviceSelect">
-    <option value="esp32-sensor">esp32-sensor</option>
-    <option value="esp32-led">esp32-led</option>
-  </select>
-  <div class="device" id="deviceId">esp32-sensor</div>
-
-  <div class="device-info" id="deviceInfo"></div>
-
-  <div class="status-row">
-    <span class="dot dot-off" id="statusDot"></span>
-    <span id="statusText">Connecting…</span>
-  </div>
-
-  <div class="led-row">
-    <div class="led-circle off" id="ledCircle"></div>
-    <span class="led-label">LED</span>
-    <label class="toggle">
-      <input type="checkbox" id="ledToggle" disabled />
-      <span class="toggle-slider"></span>
-    </label>
-  </div>
-
-  <div class="meta-row">
-    <span>RTT: <b id="rttVal">—</b></span>
-    <span id="lastUpdate" style="color:#64748b">—</span>
-  </div>
-
-  <div class="gauges">
-    <div>
-      <div class="gauge"><div class="gauge-arc"><div class="gauge-bg" style="--gauge-pct:0deg" id="tdsArc"></div><div class="gauge-center"><div class="gauge-value" id="tdsVal">—</div><div class="gauge-unit">ppm</div></div></div></div>
-      <div class="gauge-label">TDS</div>
-    </div>
-    <div>
-      <div class="gauge"><div class="gauge-arc"><div class="gauge-bg" style="--gauge-pct:0deg" id="ecArc"></div><div class="gauge-center"><div class="gauge-value" id="ecVal">—</div><div class="gauge-unit">μS/cm</div></div></div></div>
-      <div class="gauge-label">EC</div>
-    </div>
-    <div>
-      <div class="gauge"><div class="gauge-arc"><div class="gauge-bg" style="--gauge-pct:0deg" id="phArc"></div><div class="gauge-center"><div class="gauge-value" id="phVal">—</div><div class="gauge-unit">pH</div></div></div></div>
-      <div class="gauge-label">pH</div>
-    </div>
-    <div>
-      <div class="gauge"><div class="gauge-arc"><div class="gauge-bg" style="--gauge-pct:0deg" id="tempArc"></div><div class="gauge-center"><div class="gauge-value" id="tempVal">—</div><div class="gauge-unit">°C</div></div></div></div>
-      <div class="gauge-label">Temp</div>
-    </div>
-  </div>
-
-  <div class="log" id="logBox"></div>
-</div>
-
-<script>
-// ── Globals ──
-const $ = (id) => document.getElementById(id);
-let ws, currentDevice = "esp32-sensor", JWT = sessionStorage.getItem("jwt") || "";
-let lastUpdateTs = 0, connected = false, updateTimer = 0;
-
-// ── Log ──
-function log(msg) {
-  const box = $("logBox"); if (!box) return;
-  const now = new Date().toLocaleTimeString();
-  box.innerHTML += '<div class="line">' + now + " " + msg + "</div>";
-  box.scrollTop = box.scrollHeight;
+async function thresholds(request:Request,env:Env,user:User){
+  const map:Record<string,string>={phMin:'ph_min',phMax:'ph_max',ecMax:'ec_max',tempMin:'temp_min',tempMax:'temp_max'};
+  const rows=await env.DB.prepare('SELECT key,value FROM settings WHERE key IN (?,?,?,?,?)').bind(...Object.values(map)).all<{key:string;value:string}>();
+  const result:any={phMin:5.5,phMax:8.5,ecMax:2000,tempMin:18,tempMax:30};for(const [name,key] of Object.entries(map)){const value=rows.results.find(row=>row.key===key)?.value;if(value!==undefined&&Number.isFinite(Number(value)))result[name]=Number(value);}
+  if(request.method==='GET')return json({thresholds:result});if(request.method!=='PUT')return json({error:'Method not allowed'},405);if(user.role!=='superadmin')return json({error:'Superadmin required'},403);
+  const body=await smallJSON(request);const updates:any[]=[];
+  for(const [name,key] of Object.entries(map)){const value=body[name]??body[key];if(value===undefined)continue;if(typeof value!=='number'||!Number.isFinite(value))return json({error:'Invalid threshold'},400);result[name]=value;updates.push(env.DB.prepare('INSERT INTO settings(key,value,updated_at) VALUES(?,?,unixepoch()) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(key,String(value)));}
+  if(result.phMin<0||result.phMax>14||result.phMin>=result.phMax||result.ecMax<0||result.tempMin>=result.tempMax)return json({error:'Invalid threshold range'},400);
+  if(updates.length)await env.DB.batch(updates);return json({ok:true,thresholds:result,note:'Applied by device hubs within 60 seconds'});
 }
-
-// ── Sensor color thresholds (Fix 4) ──
-function sensorClass(value, ranges) {
-  if (!value && value !== 0) return "";
-  const [loN,hiN,loW,hiW] = ranges;
-  if (value >= loN && value <= hiN) return "sensor-normal";
-  if (value >= loW && value <= hiW) return "sensor-warning";
-  return "sensor-danger";
-}
-
-function updateSensor(elId, arcId, value, ranges, unit) {
-  const elV = $(elId); if (!elV) return;
-  elV.textContent = value != null ? value : "—";
-  elV.className = "gauge-value " + sensorClass(value, ranges);
-  // Update conic-gradient arc
-  const arc = $(arcId); if (!arc || value == null) return;
-  const maxVal = ranges[3]; // top of warning = full scale
-  const pct = Math.min((value / maxVal) * 360, 360);
-  arc.style.setProperty("--gauge-pct", pct + "deg");
-}
-
-function updateLastUpdate() {
-  const el = $("lastUpdate"); if (!el) return;
-  if (!connected) { el.textContent = "—"; el.style.color = "#64748b"; return; }
-  const s = Math.floor((Date.now() - lastUpdateTs) / 1000);
-  el.textContent = "Updated " + s + "s ago";
-  el.style.color = s > 30 ? "#ef4444" : s > 15 ? "#f59e0b" : "#22c55e";
-}
-
-// ── Connection state (Fix 8: amber stale) ──
-function setConnectionState(c, hasRecentData) {
-  connected = c;
-  const dot = $("statusDot"), txt = $("statusText"), tog = $("ledToggle");
-  if (c) {
-    if (!hasRecentData) {
-      dot.className = "dot dot-on";
-      txt.textContent = "Connected";
-    } else {
-      dot.className = "dot dot-stale";
-      txt.textContent = "Connected (stale)";
+export default {async fetch(request:Request,env:Env,ctx:ExecutionContext):Promise<Response>{
+  const url=new URL(request.url),path=url.pathname.replace(/\/+$/,'')||'/',method=request.method.toUpperCase();
+  try{
+    if(method==='OPTIONS')return new Response(null,{status:204,headers:{'Access-Control-Allow-Origin':url.origin,'Access-Control-Allow-Methods':'GET,POST,PUT,PATCH,DELETE,OPTIONS','Access-Control-Allow-Headers':'Content-Type,Authorization'}});
+    if((path.startsWith('/api/')||path.startsWith('/device/')||path.startsWith('/dashboard/')||path==='/health')&&(await setting(env,'greeny2_deployment_id'))!=='openezit:greeny2')return json({error:'Verified openezit database initialization required'},503);
+    if(path==='/health'&&method==='GET'){
+      const sampleColumns=await env.DB.prepare('PRAGMA table_info(telemetry)').all<any>();
+      const commandColumns=await env.DB.prepare('PRAGMA table_info(relay_commands)').all<any>();
+      const sampleNames=new Set(sampleColumns.results.map(row=>row.name)),commandNames=new Set(commandColumns.results.map(row=>row.name));
+      const nullableTds=sampleColumns.results.some(row=>row.name==='tds'&&row.notnull===0);
+      if(!nullableTds||!['ingest_id','utc_ms','date_time_hk','received_ms','relays_json','relay_valid','relay_session'].every(name=>sampleNames.has(name))||!['command_id','session_id','seq','channel','state','issued_ms','expires_ms','status','acked_utc_ms'].every(name=>commandNames.has(name)))return json({status:'error',error:'Own database schema is incomplete'},503);
+      return json({status:'ok',service:'greeny2-openezit',protocol:2,schema_version:2,deployment_marker:'openezit:greeny2'});
     }
-  } else {
-    dot.className = "dot dot-off";
-    txt.textContent = "Disconnected";
-  }
-  if (tog) tog.disabled = !c;
-}
-
-// ── Toast alerts (Fix 7) ──
-function showToast(type, message, severity) {
-  const container = $("toastContainer"); if (!container) return;
-  const toast = document.createElement("div");
-  toast.className = "toast " + (severity === "critical" ? "toast-critical" : "toast-warning");
-  toast.innerHTML = '<span class="toast-msg">' + message + '</span><span class="toast-close">✕</span>';
-  toast.querySelector(".toast-close").addEventListener("click", () => {
-    toast.style.animation = "slideOut 0.3s ease";
-    setTimeout(() => toast.remove(), 300);
-  });
-  container.appendChild(toast);
-  setTimeout(() => {
-    if (toast.parentElement) {
-      toast.style.animation = "slideOut 0.3s ease";
-      setTimeout(() => { if (toast.parentElement) toast.remove(); }, 300);
-    }
-  }, 10000);
-}
-
-// ── Commands ──
-function sendCommand(state) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({ command: "set_led", state, device_id: currentDevice, ts: Date.now() }));
-  log(state ? "ON → sent" : "OFF → sent");
-}
-
-// ── WebSocket ──
-function connectWS() {
-  if (!JWT) { showLogin(); return; }
-  const proto = location.protocol === "https:" ? "wss://" : "ws://";
-  const WS_URL = proto + location.host + "/dashboard/" + currentDevice + "?token=" + JWT;
-  log("Connecting to " + currentDevice + " …");
-  ws = new WebSocket(WS_URL);
-
-  ws.onopen = () => { log("WSS open"); };
-
-  ws.onmessage = (e) => {
-    let msg;
-    try { msg = JSON.parse(e.data); } catch (err) { return; }
-
-    if (msg.type === "state") {
-      if (msg.connected !== undefined) setConnectionState(msg.connected, false);
-      if (typeof msg.led === "boolean") {
-        $("ledCircle").className = "led-circle " + (msg.led ? "on" : "off");
-        const tog = $("ledToggle");
-        if (tog) { tog.checked = msg.led; tog.disabled = !connected; }
+    if(path==='/api/telegram/webhook')return telegramWebhook(request,env);
+    if(path==='/api/signal/query')return signalQuery(request,env);
+    if(path==='/api/auth/login'&&method==='POST')return login(request,env);
+    const upgrade=request.headers.get('Upgrade')?.toLowerCase()==='websocket';
+    if(upgrade){
+      const match=path.match(/^\/(device|dashboard)\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/);if(!match)return json({error:'Not found'},404);
+      const [,kind,id]=match,token=url.searchParams.get('token')||'';const headers=new Headers(request.headers);headers.delete('X-Greeny-User-Id');headers.delete('X-Greeny-Role');
+      if(kind==='device'){
+        const expected=await setting(env,'device_token');if(expected.length<32||!token||token!==expected)return json({error:'Unauthorized device'},401);
+        const registered=await env.DB.prepare('SELECT id FROM devices WHERE id=?').bind(id).first();if(!registered)return json({error:'Unregistered device'},403);
+      }else{
+        const user=await currentUser(token,env);if(!user)return json({error:'Unauthorized'},401);if(!(await ownsDevice(env,user,id)))return json({error:'Forbidden'},403);
+        headers.set('X-Greeny-User-Id',String(user.sub));headers.set('X-Greeny-Role',user.role);
       }
-
-      // Update gauges with color thresholds + arcs (Fixes 4 + 10)
-      updateSensor("tdsVal",  "tdsArc",  msg.tds,  [0,750,750,1500],  "ppm");
-      updateSensor("ecVal",   "ecArc",   msg.ec,   [0,1500,1500,3000], "μS/cm");
-      updateSensor("phVal",   "phArc",   msg.ph,   [6.0,7.0,5.5,8.5],  "pH");
-      updateSensor("tempVal", "tempArc", msg.temp, [20,28,18,30],       "°C");
-
-      if (msg.doTs) { const el = $("rttVal"); if (el) el.textContent = (Date.now() - msg.doTs) + "ms"; }
-
-      // Device info (Fix 9)
-      if (msg.esp32_ms !== undefined) {
-        const el = $("deviceInfo");
-        if (el) el.textContent = "ESP32 uptime: " + Math.floor(msg.esp32_ms / 1000) + "s · " + (msg.device_id || currentDevice);
+      return hub(env,id).fetch(new Request(request,{headers}));
+    }
+    if(path.startsWith('/device/')||path.startsWith('/dashboard/'))return json({error:'WebSocket upgrade required'},426);
+    if(!path.startsWith('/api/'))return env.ASSETS?env.ASSETS.fetch(request):json({error:'SPA asset binding unavailable'},503);
+    const user=await currentUser(bearer(request),env);if(!user)return json({error:'Unauthorized'},401);
+    if(user.role==='staff'&&!isReadOnlyRequest(method,path))return json({error:'Read-only account'},403);
+    if(path==='/api/telegram/config'){
+      if(user.role!=='superadmin')return json({error:'Superadmin required'},403);
+      if(!['GET','PUT'].includes(method))return json({error:'Method not allowed'},405);
+      return env.TELEGRAM_HUB.get(env.TELEGRAM_HUB.idFromName('greeny2-telegram')).fetch(new Request('https://telegram/config',{method,headers:{'Content-Type':'application/json'},...(method==='PUT'?{body:await request.text()}:{})}));
+    }
+    if(path==='/api/signal/config'){
+      if(user.role!=='superadmin')return json({error:'Superadmin required'},403);
+      if(method==='GET')return signalStatus(env);
+      if(method==='PUT')return configureSignal(request,env);
+      return json({error:'Method not allowed'},405);
+    }
+    if(path==='/api/auth/me'&&method==='GET')return json({user});
+    if(path==='/api/devices'&&method==='GET')return devices(env,user);
+    if(path==='/api/telemetry'&&method==='GET')return telemetry(url,env,user);
+    if(path==='/api/telemetry')return json({error:'Telemetry ingestion uses the authenticated device WebSocket'},405);
+    if(path==='/api/alerts'&&method==='GET')return alerts(url,env,user);
+    if(path==='/api/alerts/ack'&&method==='POST'){
+      const body=await smallJSON(request);if(!Number.isSafeInteger(body.alert_id))return json({error:'alert_id required'},400);
+      const row=await env.DB.prepare('SELECT device_id FROM alerts WHERE id=?').bind(body.alert_id).first<{device_id:string}>();if(!row)return json({error:'Not found'},404);if(!(await ownsDevice(env,user,row.device_id)))return json({error:'Forbidden'},403);
+      await env.DB.prepare('UPDATE alerts SET acknowledged=1 WHERE id=?').bind(body.alert_id).run();return json({success:true});
+    }
+    if(path==='/api/settings/thresholds')return thresholds(request,env,user);
+    if(path==='/api/relay'){
+      if(method==='GET'){
+        const id=url.searchParams.get('device_id')||'esp32-sensor';if(!(await ownsDevice(env,user,id)))return json({error:'Forbidden'},403);return hub(env,id).fetch('https://device-hub/state?device_id='+encodeURIComponent(id));
       }
-
-      lastUpdateTs = Date.now();
-      updateLastUpdate();
-      setConnectionState(true, true);
+      if(method!=='POST')return json({error:'Method not allowed'},405);
+      const command=relayRequest(await smallJSON(request));if(!command)return json({error:'UUID command_id,device_id,channel 1–4 and boolean state required'},400);if(!(await ownsDevice(env,user,command.device_id)))return json({error:'Forbidden'},403);
+      return hub(env,command.device_id).fetch(new Request('https://device-hub/relay-cmd',{method:'POST',headers:{'Content-Type':'application/json','X-Greeny-User-Id':String(user.sub),'X-Greeny-Role':user.role},body:JSON.stringify(command)}));
     }
-
-    if (msg.type === "alert") {
-      showToast(msg.alert_type, msg.message, msg.severity);
-      log("[ALERT] " + msg.alert_type + ": " + msg.message);
+    if(path==='/api/chat'&&method==='POST'){
+      const body=await smallJSON(request),id=body.device_id??'esp32-sensor';if(typeof body.message!=='string'||!body.message.trim()||body.message.length>4000||typeof id!=='string'||!DEVICE_ID_RE.test(id))return json({error:'Valid message and device_id required'},400);if(!(await ownsDevice(env,user,id)))return json({error:'Forbidden'},403);
+      return env.GREENY_AGENT.get(env.GREENY_AGENT.idFromName('greeny-readonly')).fetch(new Request('https://greeny-agent/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:body.message,device_id:id})}));
     }
-  };
-
-  ws.onclose = () => {
-    setConnectionState(false, false);
-    log("WSS closed — reconnecting in 3s…");
-    setTimeout(connectWS, 3000);
-  };
-
-  ws.onerror = () => { log("WSS error"); };
-}
-
-// ── Auth ──
-function showLogin() {
-  $("loginBox").style.display = "block";
-  $("dashboardBox").style.display = "none";
-  if (ws) { try { ws.close(); } catch(e) {} ws = null; }
-  JWT = ""; sessionStorage.removeItem("jwt");
-  connected = false;
-  if (updateTimer) { clearInterval(updateTimer); updateTimer = 0; }
-}
-
-function showDashboard() {
-  $("loginBox").style.display = "none";
-  $("dashboardBox").style.display = "block";
-  $("deviceId").textContent = currentDevice;
-  updateTimer = setInterval(updateLastUpdate, 1000);
-  connectWS();
-}
-
-async function doLogin() {
-  const username = $("username").value.trim();
-  const password = $("password").value;
-  const errEl = $("loginError");
-  if (!username || !password) { errEl.textContent = "Enter username and password"; return; }
-  errEl.textContent = "";
-  try {
-    const resp = await fetch("/api/auth/login", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
-    });
-    const data = await resp.json();
-    if (!resp.ok || !data.token) { errEl.textContent = data.error || "Login failed"; return; }
-    JWT = data.token;
-    sessionStorage.setItem("jwt", JWT);
-    log("Logged in as " + data.user.username);
-    showDashboard();
-  } catch (err) { errEl.textContent = "Network error — try again"; }
-}
-
-function doLogout() { showLogin(); log("Logged out"); }
-
-// ── Device Switching ──
-function switchDevice(id) {
-  currentDevice = id; $("deviceId").textContent = id;
-  if (ws) { try { ws.close(); } catch(e) {} ws = null; }
-  connectWS(); log("Switched to " + id);
-}
-
-// ── Init ──
-$("btnLogin").addEventListener("click", doLogin);
-$("password").addEventListener("keydown", (e) => { if (e.key === "Enter") doLogin(); });
-$("btnLogout").addEventListener("click", doLogout);
-$("ledToggle").addEventListener("change", () => sendCommand($("ledToggle").checked));
-$("deviceSelect").addEventListener("change", (e) => switchDevice(e.target.value));
-
-if (JWT) { showDashboard(); } else { showLogin(); }
-</script>
-</body>
-</html>`;
-
-// ── CORS Helper ───────────────────────────────────────────────────────────
-
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
-};
-
-function corsResponse(body: BodyInit | null, init?: ResponseInit): Response {
-  const headers = new Headers(init?.headers);
-  for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v);
-  return new Response(body, { ...init, headers });
-}
-
-function corsJson(data: unknown, init?: ResponseInit): Response {
-  const headers = new Headers(init?.headers);
-  headers.set("Content-Type", "application/json");
-  for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v);
-  return new Response(JSON.stringify(data), { ...init, headers });
-}
-
-// ── Worker ────────────────────────────────────────────────────────────────
-
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-    const path = url.pathname;
-    const method = request.method;
-
-    // --- OPTIONS preflight (Fix 1) ---
-    if (method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: CORS_HEADERS });
-    }
-
-    // --- Public routes (no auth) ---
-    if (method === "GET" && (path === "/" || path === "/dashboard")) {
-      return corsResponse(DASHBOARD_HTML, {
-        headers: { "Content-Type": "text/html; charset=utf-8" },
-      });
-    }
-
-    if (method === "GET" && path === "/health") {
-      return corsJson({
-        status: "ok",
-        uptime: Math.floor(performance.now() / 1000),
-      });
-    }
-
-    // --- Auth: POST /api/auth/login ---
-    if (method === "POST" && path === "/api/auth/login") {
-      return handleLogin(request, env);
-    }
-
-    // --- Auth middleware for protected routes ---
-    if (needsAuth(method, path)) {
-      const user = await authenticate(request, env);
-      if (!user) {
-        return corsJson({ error: "Unauthorized" }, { status: 401 });
-      }
-
-      // --- Protected REST routes ---
-      if (method === "GET" && path === "/api/auth/me") {
-        return corsJson({ user });
-      }
-
-      if (method === "GET" && path === "/api/telemetry") {
-        return handleGetTelemetry(url, env);
-      }
-
-      if (method === "GET" && path === "/api/devices") {
-        return handleGetDevices(env);
-      }
-
-      if (method === "GET" && path === "/api/alerts") {
-        return handleGetAlerts(url, env);
-      }
-
-      if (method === "POST" && path === "/api/alerts/ack") {
-        return handleAckAlert(request, env);
-      }
-      // Alert thresholds live in D1 so the DeviceHub DO can read them.
-      if (path === "/api/settings/thresholds") {
-        if (method === "GET") return handleGetThresholds(env);
-        if (method === "PUT") return handlePutThresholds(request, env);
-      }
-
-      if (method === "POST" && path === "/api/relay") {
-        return handleRelay(request, env);
-      }
-
-      if (method === "POST" && path === "/api/chat") {
-        return handleChat(request, env);
-      }
-    }
-
-    // --- WebSocket upgrade → route to DO (AUTHENTICATED) ---
-    // Browsers and ESP32 cannot set an Authorization header on a WebSocket
-    // handshake, so the credential travels in the `?token=` query parameter.
-    //   /dashboard/:id  → JWT (same secret as the REST API)
-    //   /device/:id     → device token (D1 settings.device_token)
-    const upgrade = request.headers.get("Upgrade");
-    if (upgrade === "websocket") {
-      const segments = path.split("/").filter(Boolean);
-      const deviceId = segments.length >= 2 ? segments[1] : "unknown";
-      const token = url.searchParams.get("token") || "";
-
-      if (path.startsWith("/dashboard/")) {
-        const secret = await getJWTSecret(env);
-        const payload = secret ? await verifyJWT(token, secret) : null;
-        if (!payload) {
-          return corsJson({ error: "Unauthorized" }, { status: 401 });
-        }
-      } else if (path.startsWith("/device/")) {
-        const expected = await getDeviceToken(env);
-        if (!expected) {
-          console.warn("[Worker] device_token not configured — device channel open");
-        } else if (token !== expected) {
-          console.warn(`[Worker] rejected device ${deviceId}: bad device token`);
-          return corsJson({ error: "Unauthorized device" }, { status: 401 });
-        }
-      } else {
-        return corsJson({ error: "Not found" }, { status: 404 });
-      }
-
-      const doId = env.DEVICE_HUB.idFromName(deviceId);
-      const stub = env.DEVICE_HUB.get(doId);
-      return stub.fetch(request);
-    }
-
-    return corsResponse("Not found", { status: 404 });
-  },
-};
-
-// ── Route Handlers ────────────────────────────────────────────────────────
-
-async function handleLogin(
-  request: Request,
-  env: Env
-): Promise<Response> {
-  try {
-    const body: { username?: string; password?: string } = await request.json();
-    if (!body.username || !body.password) {
-      return corsJson({ error: "username and password required" }, { status: 400 });
-    }
-
-    // NOTE: no `salt` column — the salt is embedded in the self-describing
-    // `pbkdf2:<iters>:<salt>:<hash>` value of password_hash, so the same row
-    // works on the Worker and on Pages Functions.
-    // `active = 1` matters: without it, a disabled account could still log in
-    // here (Pages already filtered on it, but the SPA authenticates HERE).
-    const user = await env.DB.prepare(
-      "SELECT id, username, password_hash, role, office_id, display_name FROM users WHERE username = ? AND active = 1"
-    ).bind(body.username).first<{
-      id: number; username: string; password_hash: string; role: string;
-      office_id: number | null; display_name: string;
-    }>();
-
-    if (!user) {
-      return corsJson({ error: "Invalid credentials" }, { status: 401 });
-    }
-
-    const valid = await verifyPassword(body.password, user.password_hash);
-    if (!valid) {
-      return corsJson({ error: "Invalid credentials" }, { status: 401 });
-    }
-
-    // The JWT payload MUST match what Pages Functions signs
-    // (spa/functions/api/auth/login.ts): {sub, username, role, office_id,
-    // display_name}. The SPA's token is used against BOTH the Worker and the
-    // Pages management API, and the Pages routes rely on
-    // `c.data.user.office_id` — a payload without it made every office_admin
-    // look like they belonged to no office (and staff/user rows bind undefined).
-    const secret = await getJWTSecret(env);
-    const token = await signJWT(
-      {
-        sub: user.id,
-        username: user.username,
-        role: user.role,
-        office_id: user.office_id,
-        display_name: user.display_name,
-        iat: Math.floor(Date.now() / 1000),
-      },
-      secret
-    );
-
-    return corsJson({
-      token,
-      user: {
-        id: user.id,
-        username: user.username,
-        role: user.role,
-        office_id: user.office_id,
-        display_name: user.display_name,
-      },
-    });
-  } catch (err) {
-    return corsJson({ error: "Bad request" }, { status: 400 });
-  }
-}
-
-async function handleGetTelemetry(
-  url: URL,
-  env: Env
-): Promise<Response> {
-  const deviceId = url.searchParams.get("device_id");
-  const limit = Math.min(parseInt(url.searchParams.get("limit") || "100"), 1000);
-
-  let rows;
-  if (deviceId) {
-    rows = await env.DB.prepare(
-      "SELECT * FROM telemetry WHERE device_id = ? ORDER BY created_at DESC LIMIT ?"
-    ).bind(deviceId, limit).all();
-  } else {
-    rows = await env.DB.prepare(
-      "SELECT * FROM telemetry ORDER BY created_at DESC LIMIT ?"
-    ).bind(limit).all();
-  }
-
-  return corsJson({ telemetry: rows.results });
-}
-
-async function handleGetDevices(env: Env): Promise<Response> {
-  const rows = await env.DB.prepare(
-    "SELECT * FROM devices ORDER BY id ASC"
-  ).all();
-  return corsJson({ devices: rows.results });
-}
-
-async function handleGetAlerts(
-  url: URL,
-  env: Env
-): Promise<Response> {
-  const deviceId = url.searchParams.get("device_id");
-  const acknowledged = url.searchParams.get("acknowledged");
-  const limit = Math.min(parseInt(url.searchParams.get("limit") || "50"), 500);
-
-  // NOTE: `acknowledged` used to be ignored here, so the SPA's
-  // pending/resolved filter silently had no effect (it passes
-  // ?acknowledged=0|1 through apiFetch, which goes to this Worker, not to
-  // Pages — the Pages implementation did honour the parameter).
-  let sql = "SELECT * FROM alerts WHERE 1=1";
-  const params: (string | number)[] = [];
-  if (deviceId) {
-    sql += " AND device_id = ?";
-    params.push(deviceId);
-  }
-  if (acknowledged !== null && acknowledged !== "") {
-    sql += " AND acknowledged = ?";
-    params.push(parseInt(acknowledged, 10) ? 1 : 0);
-  }
-  sql += " ORDER BY created_at DESC LIMIT ?";
-  params.push(limit);
-
-  const rows = await env.DB.prepare(sql).bind(...params).all();
-  return corsJson({ alerts: rows.results });
-}
-
-// ─── Alert thresholds (D1 `settings`) ────────────────────────────────────────
-// DeviceHub caches these during alarm() and evaluates alerts against the cache,
-// so writing here changes alerting behaviour within one alarm cycle. Previously
-// the settings page wrote only to localStorage and nothing read it back, so
-// editing a threshold had no effect at all.
-
-const THRESHOLD_FIELDS: Record<string, string> = {
-  ph_min: "phMin",
-  ph_max: "phMax",
-  ec_max: "ecMax",
-  temp_min: "tempMin",
-  temp_max: "tempMax",
-};
-
-async function handleGetThresholds(env: Env): Promise<Response> {
-  const rows = await env.DB.prepare(
-    "SELECT key, value FROM settings WHERE key IN ('ph_min','ph_max','ec_max','temp_min','temp_max')"
-  ).all<{ key: string; value: string }>();
-  const thresholds: Record<string, number> = {};
-  for (const r of rows.results ?? []) {
-    const n = parseFloat(String(r.value));
-    if (Number.isFinite(n)) thresholds[THRESHOLD_FIELDS[r.key] ?? r.key] = n;
-  }
-  return corsJson({ thresholds });
-}
-
-async function handlePutThresholds(request: Request, env: Env): Promise<Response> {
-  let body: Record<string, unknown>;
-  try {
-    body = (await request.json()) as Record<string, unknown>;
-  } catch {
-    return corsJson({ error: "invalid JSON body" }, { status: 400 });
-  }
-
-  const updated: Record<string, number> = {};
-  for (const [key, field] of Object.entries(THRESHOLD_FIELDS)) {
-    const raw = body[field] ?? body[key];
-    if (raw === undefined || raw === null || raw === "") continue;
-    const n = parseFloat(String(raw));
-    if (!Number.isFinite(n)) {
-      return corsJson({ error: `invalid value for ${field}` }, { status: 400 });
-    }
-    await env.DB.prepare(
-      `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch())
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = unixepoch()`
-    ).bind(key, String(n)).run();
-    updated[field] = n;
-  }
-
-  if (!Object.keys(updated).length) {
-    return corsJson({ error: "no threshold fields supplied" }, { status: 400 });
-  }
-  return corsJson({
-    ok: true,
-    updated,
-    note: "DeviceHub applies these on its next alarm cycle (within ~60s)",
-  });
-}
-
-async function handleAckAlert(
-  request: Request,
-  env: Env
-): Promise<Response> {
-  try {
-    const body: { alert_id?: number } = await request.json();
-    if (!body.alert_id) {
-      return corsJson({ error: "alert_id required" }, { status: 400 });
-    }
-
-    await env.DB.prepare(
-      "UPDATE alerts SET acknowledged = 1 WHERE id = ?"
-    ).bind(body.alert_id).run();
-
-    return corsJson({ success: true });
-  } catch (err) {
-    return corsJson({ error: "Bad request" }, { status: 400 });
-  }
-}
-
-// ── Chat (AI Agent) ────────────────────────────────────────────────────────
-
-async function handleChat(request: Request, env: Env): Promise<Response> {
-  try {
-    const doId = env.GREENY_AGENT.idFromName("greeny");
-    const stub = env.GREENY_AGENT.get(doId);
-    return stub.fetch(request);
-  } catch (err) {
-    console.error("[Worker] handleChat error:", err);
-    return corsJson({ error: "Agent unavailable" }, { status: 503 });
-  }
-}
-
-// ── Relay (Casey protocol compat) ─────────────────────────────────────────
-
-async function handleRelay(request: Request, env: Env): Promise<Response> {
-  try {
-    const body = await request.json() as { device_id?: string; relay1?: number; relay2?: number };
-    if (!body.device_id) return corsJson({ error: "device_id required" }, { status: 400 });
-
-    const doId = env.DEVICE_HUB.idFromName(body.device_id);
-    const stub = env.DEVICE_HUB.get(doId);
-    // Forward to DO's relay-cmd endpoint
-    return stub.fetch(new Request("https://device-hub/relay-cmd", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }));
-  } catch {
-    return corsJson({ error: "Bad request" }, { status: 400 });
-  }
-}
-
-// ── Env ───────────────────────────────────────────────────────────────────
-
-interface Env {
-  DEVICE_HUB: DurableObjectNamespace<DeviceHub>;
-  GREENY_AGENT: DurableObjectNamespace<GreenyAgent>;
-  DB: D1Database;
-  AI: Ai;
-}
-
-export { DeviceHub, GreenyAgent };
+    const managed=await managementAPI(request,env,ctx,user);return managed??json({error:'Not found'},404);
+  }catch(error){console.error('Greeny2 request failed',path,error instanceof Error?error.name:'error');return json({error:'Request could not be completed'},500);}
+}};
+export {DeviceHub,GreenyAgent,TelegramHub};

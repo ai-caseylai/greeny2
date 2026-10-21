@@ -21,11 +21,13 @@ export interface Device {
 export interface Telemetry {
   device_id: string
   device_name?: string
-  ph: number
-  ec: number
-  tds: number
-  water_temp: number  // mapped from temp field
-  temp: number        // our backend uses "temp"
+  ph: number | null
+  ec: number | null
+  tds: number | null
+  water_temp: number | null
+  temp: number | null
+  utc_ms?: number | null
+  received_ms?: number | null
   water_level?: number
   ndvi?: number
   spectral_red?: number

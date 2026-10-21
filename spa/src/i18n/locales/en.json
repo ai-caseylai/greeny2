@@ -39,7 +39,7 @@
     "sensors": "Sensors",
     "monitoring": "Monitoring",
     "parameters": "Parameters",
-    "domain": "greeny.techforliving.net",
+    "domain": "greeny2.openezit.com",
     "welcomeBack": "Welcome Back",
     "signIn": "Sign in to your dashboard",
     "username": "Username",
@@ -176,7 +176,7 @@
     "askMe": "Ask me about your plants",
     "howPlants": "How are the plants?",
     "anyAlerts": "Any alerts?",
-    "turnOnLed": "Turn on the LED",
+    "latestReadings": "What are the latest pH, EC and temperature readings?",
     "sorry": "Sorry, I could not process that.",
     "networkError": "Network error — try again."
   },

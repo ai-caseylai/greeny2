@@ -39,7 +39,7 @@
     "sensors": "传感器",
     "monitoring": "监控",
     "parameters": "参数",
-    "domain": "greeny.techforliving.net",
+    "domain": "greeny2.openezit.com",
     "welcomeBack": "欢迎回来",
     "signIn": "登录您的仪表板",
     "username": "用户名",
@@ -176,7 +176,7 @@
     "askMe": "询问您的植物状况",
     "howPlants": "植物状况如何？",
     "anyAlerts": "有任何警报吗？",
-    "turnOnLed": "开启 LED",
+    "latestReadings": "最新 pH、EC 及温度是多少？",
     "sorry": "抱歉，我无法处理该请求。",
     "networkError": "网络错误 — 请重试。"
   },

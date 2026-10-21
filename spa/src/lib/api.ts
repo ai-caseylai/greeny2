@@ -1,4 +1,16 @@
-const API_BASE = 'https://iot-hub.ai-caseylai.workers.dev'
+export const API_BASE = (() => {
+  const url=new URL(import.meta.env.VITE_API_BASE_URL || window.location.origin)
+  const local=['localhost','127.0.0.1','[::1]'].includes(url.hostname)
+  if((url.protocol!=='https:' && !(local && url.protocol==='http:')) || url.username || url.password || url.search || url.hash || url.pathname!=='/')throw new Error('VITE_API_BASE_URL must be an HTTPS origin (HTTP localhost is allowed for development).')
+  return url.origin
+})()
+
+export function dashboardUrl(deviceId:string,token:string):string {
+  const url=new URL('/dashboard/'+encodeURIComponent(deviceId),API_BASE)
+  url.protocol=url.protocol==='https:'?'wss:':'ws:'
+  url.searchParams.set('token',token)
+  return url.toString()
+}
 
 export function getToken(): string | null {
   return sessionStorage.getItem('token')

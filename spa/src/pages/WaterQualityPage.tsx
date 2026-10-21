@@ -1,3 +1,4 @@
+import SampleTime from '../components/SampleTime'
 import { useTranslation } from 'react-i18next'
 import { useState, useEffect, useMemo } from 'react'
 import { useDevices } from '../hooks/useDevices'
@@ -6,6 +7,7 @@ import { useWebSocket } from '../hooks/useWebSocket'
 import { Droplets, Thermometer, Zap, RefreshCw, Leaf } from 'lucide-react'
 import { formatTime, timeAgo } from '../lib/utils'
 import type { Telemetry } from '../types'
+import { isLiveReading, mergeReadings, formatReadingTime } from '../lib/telemetry'
 
 // Raw SVG history chart — survives streaming data re-renders
 function HistoryChart({ data, color, height = 260 }: {
@@ -95,22 +97,22 @@ function GaugeCard({ label, value, unit, icon: Icon, color, min, max, optimal }:
   const pct = value !== null ? Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100)) : 0
   const inRange = value !== null && value >= optimal[0] && value <= optimal[1]
   return (
-    <div className={`rounded-lg border bg-gray-50 p-3 transition-all ${!inRange ? 'border-amber-300 ring-2 ring-amber-400 ring-offset-1' : 'border-gray-100'}`}>
+    <div className={`rounded-lg border bg-gray-50 p-3 transition-all ${value!==null&&!inRange ? 'border-amber-300 ring-2 ring-amber-400 ring-offset-1' : 'border-gray-100'}`}>
       <div className="flex items-center gap-1.5 mb-2">
-        <Icon className={`h-3.5 w-3.5 ${!inRange ? 'animate-pulse' : ''}`} style={{ color }} />
+        <Icon className={`h-3.5 w-3.5 ${value!==null&&!inRange ? 'animate-pulse' : ''}`} style={{ color }} />
         <span className="text-xs text-gray-500">{label}</span>
       </div>
       <div className="flex items-baseline gap-0.5 mb-2">
-        <span className="text-xl font-bold text-gray-900">{value !== null ? (Number.isInteger(value) ? value : value.toFixed(1)) : '-'}</span>
+        <span className="text-xl font-bold text-gray-900">{value !== null ? value.toFixed(label==='pH'||label==='EC'?2:label==='Temp'?1:0) : '-'}</span>
         <span className="text-[10px] text-gray-400">{unit}</span>
       </div>
       <div className="h-1.5 rounded-full bg-gray-200 overflow-hidden">
-        <div className={`h-full rounded-full transition-all duration-500 ${!inRange ? 'animate-pulse' : ''}`}
+        <div className={`h-full rounded-full transition-all duration-500 ${value!==null&&!inRange ? 'animate-pulse' : ''}`}
           style={{ width: `${pct}%`, backgroundColor: inRange ? color : '#FF9800' }} />
       </div>
       <div className="mt-1 flex justify-between text-[9px] text-gray-400">
         <span>{min}</span>
-        <span className={inRange ? 'text-green-600' : 'text-amber-600 font-medium'}>{inRange ? t('waterQuality.normal') : t('waterQuality.abnormal')}</span>
+        <span className={inRange ? 'text-green-600' : 'text-amber-600 font-medium'}>{value===null?'未提供':inRange ? t('waterQuality.normal') : t('waterQuality.abnormal')}</span>
         <span>{max}</span>
       </div>
     </div>
@@ -129,44 +131,25 @@ export default function WaterQualityPage() {
   const { devices: initialDevices } = useDevices()
   const { data: initialTelemetry, refetch } = useTelemetry(undefined, 200)
 
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
   const firstDeviceId = initialDevices[0]?.device_id || initialDevices[0]?.id || null
-  const { connected: wsConnected, on } = useWebSocket(firstDeviceId)
+  const activeDeviceId=selectedDeviceId||firstDeviceId
+  const { connected: wsConnected, on } = useWebSocket(activeDeviceId)
 
   const [wsTelemetry, setWsTelemetry] = useState<Telemetry[]>([])
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
   const [activeMetric, setActiveMetric] = useState<string>('pH')
   const [page, setPage] = useState(0)
   const [refreshing, setRefreshing] = useState(false)
   const [lastRefresh, setLastRefresh] = useState<number>(Date.now())
   const pageSize = 5
 
-  // WS: state → collect WS entries
-  useEffect(() => {
-    return on('state', (msg: any) => {
-      const entry = normalizeReading(msg, 'ws')
-      if (!entry.device_id) return
-      setWsTelemetry(prev => {
-        const rest = prev.filter(t => t.device_id !== entry.device_id)
-        return [entry, ...rest].slice(0, 200)
-      })
-      setLastRefresh(Date.now())
-    })
-  }, [on])
-
-  // Merge HTTP seed + WS entries — HTTP is the base, WS prepends on top
-  const telemetry = useMemo(() => {
-    const seen = new Set<string>()
-    const merged: Telemetry[] = []
-    for (const t of wsTelemetry) {
-      const key = `${t.device_id}-${t.ts_ms}`
-      if (!seen.has(key)) { seen.add(key); merged.push(t) }
-    }
-    for (const t of initialTelemetry) {
-      const key = `${t.device_id}-${t.ts_ms}`
-      if (!seen.has(key)) { seen.add(key); merged.push(t) }
-    }
-    return merged.slice(0, 200)
-  }, [initialTelemetry, wsTelemetry])
+  useEffect(()=>{
+    const receive=(msg:any)=>{const entry=normalizeReading(msg,'ws');if(!isLiveReading(entry)||!entry.device_id)return;setWsTelemetry(prev=>mergeReadings([entry],prev));setLastRefresh(Date.now())}
+    const a=on('state',receive),b=on('telemetry_update',receive)
+    return ()=>{a();b()}
+  },[on])
+  const telemetry=useMemo(()=>mergeReadings(wsTelemetry,initialTelemetry),[initialTelemetry,wsTelemetry])
+  useEffect(()=>{if(wsConnected)return;const id=window.setInterval(()=>{void refetch()},30000);return ()=>window.clearInterval(id)},[wsConnected,refetch])
 
   const handleRefresh = async () => {
     setRefreshing(true)
@@ -175,9 +158,7 @@ export default function WaterQualityPage() {
     setRefreshing(false)
   }
 
-  const deviceTelemetry = selectedDeviceId
-    ? telemetry.filter(t => t.device_id === selectedDeviceId)
-    : telemetry
+  const deviceTelemetry = telemetry.filter(row=>row.device_id===activeDeviceId)
 
   const latest = deviceTelemetry.length > 0 ? deviceTelemetry[0] : null
   const pageData = deviceTelemetry.slice(page * pageSize, (page + 1) * pageSize)
@@ -185,11 +166,11 @@ export default function WaterQualityPage() {
 
   // Chart data: single metric, last 50 points, oldest first
   const chartData = [...deviceTelemetry].slice(0, 50).reverse().map((r) => ({
-    time: new Date(r.ts_ms ?? (r.created_at * 1000)).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }),
+    time: formatReadingTime(r),
     value: activeMetric === 'pH' ? Number(r.ph?.toFixed(2))
-      : activeMetric === 'TDS' ? Math.round(r.tds ?? r.ec ?? 0)
-      : activeMetric === 'EC' ? Number((r.ec ?? 0).toFixed(1))
-      : Number((r.water_temp ?? 0).toFixed(1)),
+      : activeMetric === 'TDS' ? (r.tds!==null?Math.round(r.tds):null)
+      : activeMetric === 'EC' ? (r.ec!==null?Number(r.ec.toFixed(2)):null)
+      : (r.water_temp!==null?Number(r.water_temp.toFixed(1)):null),
   }))
 
   const activeMetricDef = METRICS.find(m => m.key === activeMetric)!
@@ -215,7 +196,7 @@ export default function WaterQualityPage() {
         <span className="text-gray-300">·</span>
         <span>{firstDeviceId || '—'}</span>
         <span className="text-gray-300">·</span>
-        <span>Updated {timeAgo(lastRefresh)}</span>
+        <SampleTime reading={latest} />
         <span className="text-gray-300">·</span>
         <span>{deviceTelemetry.length} readings</span>
       </div>
@@ -249,7 +230,7 @@ export default function WaterQualityPage() {
                   ))}
                 </select>
                 {latest && (
-                  <span className="text-[10px] text-gray-400">Last reading: {formatTime(latest.created_at)}</span>
+                  <span className="text-[10px]"><SampleTime reading={latest} /></span>
                 )}
               </div>
             </div>
@@ -258,7 +239,7 @@ export default function WaterQualityPage() {
             <div className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
               <GaugeCard label="pH" value={latest?.ph ?? null} unit="" icon={Droplets} color="#2196F3" min={0} max={14} optimal={[5.5, 7.5]} />
               <GaugeCard label="EC" value={latest?.ec ?? null} unit="µS/cm" icon={Zap} color="#4CAF50" min={0} max={3000} optimal={[800, 1500]} />
-              <GaugeCard label="TDS" value={latest?.tds ?? latest?.ec ?? null} unit="ppm" icon={Zap} color="#FF9800" min={0} max={2000} optimal={[100, 1000]} />
+              <GaugeCard label="TDS" value={latest?.tds ?? null} unit="ppm" icon={Zap} color="#FF9800" min={0} max={2000} optimal={[100, 1000]} />
               <GaugeCard label="Temp" value={latest?.water_temp ?? null} unit="°C" icon={Thermometer} color="#E91E63" min={0} max={50} optimal={[18, 28]} />
             </div>
 
@@ -297,11 +278,11 @@ export default function WaterQualityPage() {
                   {pageData.map((r: any, i: number) => (
                     <tr key={i} className="border-b border-border/30 hover:bg-gray-50/50">
                       <td className="px-4 py-2">{r.ph?.toFixed(2)}</td>
-                      <td className="px-4 py-2">{r.ec?.toFixed(1)}</td>
-                      <td className="px-4 py-2">{r.tds != null ? Math.round(r.tds) : (r.ec != null ? Math.round(r.ec) : '-')}</td>
+                      <td className="px-4 py-2">{r.ec?.toFixed(2)}</td>
+                      <td className="px-4 py-2">{r.tds != null ? Math.round(r.tds) : '未提供'}</td>
                       <td className="px-4 py-2">{r.water_temp?.toFixed(1)}</td>
                       <td className="px-4 py-2">{r.led != null ? (r.led ? t('waterQuality.on') : t('waterQuality.off')) : '-'}</td>
-                      <td className="px-4 py-2 text-gray-400">{formatTime(r.created_at)}</td>
+                      <td className="px-4 py-2 text-gray-400">{formatReadingTime(r)}</td>
                     </tr>
                   ))}
                   {pageData.length === 0 && (
