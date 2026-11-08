@@ -59,7 +59,7 @@ export default {async fetch(request:Request,env:Env,ctx:ExecutionContext):Promis
       const sampleNames=new Set(sampleColumns.results.map(row=>row.name)),commandNames=new Set(commandColumns.results.map(row=>row.name));
       const nullableTds=sampleColumns.results.some(row=>row.name==='tds'&&row.notnull===0);
       if(!nullableTds||!['ingest_id','utc_ms','date_time_hk','received_ms','relays_json','relay_valid','relay_session'].every(name=>sampleNames.has(name))||!['command_id','session_id','seq','channel','state','issued_ms','expires_ms','status','acked_utc_ms'].every(name=>commandNames.has(name)))return json({status:'error',error:'Own database schema is incomplete'},503);
-      return json({status:'ok',service:'greeny2-openezit',protocol:2,schema_version:2,deployment_marker:'openezit:greeny2'});
+      return json({status:'ok',service:'greeny2-openezit',protocol:2,schema_version:2,deployment_marker:'openezit:greeny2',resource_revision:'20261023-do-v1'});
     }
     if(path==='/api/telegram/webhook')return telegramWebhook(request,env);
     if(path==='/api/signal/query')return signalQuery(request,env);

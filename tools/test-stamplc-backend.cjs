@@ -32,7 +32,7 @@ function d1(db){return {hook:null,prepare(sql){const owner=this;let args=[];retu
   const local=new DatabaseSync(':memory:'),db=d1(main),promises=[];
   let device=new MockWS({role:'esp32',deviceId:'esp32-sensor',connectedAt:clock,seq:0});
   const dashboard=new MockWS({role:'dashboard',deviceId:'esp32-sensor',userId:2,connectedAt:clock});
-  const ctx={webSockets:[device,dashboard],getWebSockets(){return this.webSockets.filter(ws=>ws.readyState===1);},acceptWebSocket(ws){this.webSockets.push(ws);},waitUntil(p){promises.push(Promise.resolve(p));},storage:{sql:{exec(sql,...args){return local.prepare(sql).all(...args);}},async setAlarm(ms){return ms;}}};
+  const ctx={webSockets:[device,dashboard],getWebSockets(){return this.webSockets.filter(ws=>ws.readyState===1);},acceptWebSocket(ws){this.webSockets.push(ws);},waitUntil(p){promises.push(Promise.resolve(p));},storage:{sql:{exec(sql,...args){return local.prepare(sql).all(...args);}},async setAlarm(ms){return ms;},async deleteAlarm(){}}};
   let hub=new DeviceHub(ctx,{DB:db});
   const snapshot=async()=>await(await hub.fetch(new Request('https://device-hub/state'))).json();
   const message=async body=>hub.webSocketMessage(device,JSON.stringify({device_id:'esp32-sensor',...body}));
@@ -130,6 +130,63 @@ function d1(db){return {hook:null,prepare(sql){const owner=this;let args=[];retu
   check((await worker.fetch(new Request('https://greeny2.openezit.com/api/devices',{headers:{Authorization:'Bearer '+bridgeKey}}),env,execution)).status===401,'read-only bridge key grants no administrator REST access');
   const staleAnswer=await agent.fetch(new Request('https://agent/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_id:'esp32-sensor',message:'請描述最新水質。'})}));const staleAnswerBody=await staleAnswer.json();
   check(staleAnswerBody.reply.includes('最後讀數')&&staleAnswerBody.reply.includes('香港')&&staleAnswerBody.ai_used===true,'general LLM answer cannot omit program-enforced stale notice');
+
+  // Resource regression fixtures never connect to Cloudflare or physical outputs.
+  function resourceFixture(connected=false){
+    const audit=new DatabaseSync(':memory:');audit.exec(read('edge/db/openezit-schema.sql'));
+    audit.exec("INSERT INTO users(id,username,password_hash,role,active) VALUES(1,'resource-admin','unused','superadmin',1)");
+    const storageDB=new DatabaseSync(':memory:'),queries=[],alarms=[];let armed=null,writes=0;
+    const socket=new MockWS({role:'esp32',deviceId:'esp32-sensor',connectedAt:clock,seq:0});
+    const context={sockets:connected?[socket]:[],getWebSockets(){return this.sockets.filter(ws=>ws.readyState===1);},waitUntil(p){promises.push(Promise.resolve(p));},storage:{sql:{exec(sql,...args){queries.push({sql,args});if(/^(INSERT|UPDATE|DELETE|CREATE)/.test(sql))writes++;return storageDB.prepare(sql).all(...args);}},async setAlarm(ms){armed=ms;alarms.push(ms);},async deleteAlarm(){armed=null;}}};
+    const database=d1(audit),fixture={audit,storageDB,context,database,socket,queries,alarms,hub:null,get armed(){return armed;},get writes(){return writes;},wake(){this.hub=new DeviceHub(context,{DB:database});},async fire(){armed=null;await this.hub.alarm();},async send(data){await this.hub.webSocketMessage(socket,JSON.stringify({device_id:'esp32-sensor',...data}));},async state(){return (await this.hub.fetch(new Request('https://device-hub/state?device_id=esp32-sensor'))).json();}};
+    fixture.wake();return fixture;
+  }
+  function queuedSample(f,id,received=clock){f.storageDB.prepare('INSERT INTO stamplc_samples(ingest_id,device_id,ph,ec,temp,tds,utc_ms,date_time_hk,esp32_ms,received_ms) VALUES(?,?,?,?,?,?,?,?,?,?)').run(id,'esp32-sensor',7,108,24.6,null,received,protocol.hkTime(received),1,received);}
+  const idle=resourceFixture();await idle.fire();check(idle.armed===null&&idle.alarms.length===0,'offline empty hub does not perpetually re-arm alarms');
+  const indexedPlans=[
+    ['latest sample','SELECT * FROM stamplc_samples ORDER BY received_ms DESC LIMIT 1',[]],
+    ['pending commands','SELECT * FROM stamplc_commands WHERE status=? ORDER BY issued_ms',['pending']],
+    ['channel history','SELECT state FROM stamplc_commands WHERE channel=? ORDER BY issued_ms DESC LIMIT 1',[1]],
+    ['sample queue','SELECT * FROM stamplc_samples WHERE flushed=0 ORDER BY received_ms LIMIT 100',[]],
+    ['command queue','SELECT * FROM stamplc_commands WHERE flushed=0 LIMIT 100',[]],
+    ['alert queue','SELECT * FROM stamplc_alerts WHERE flushed=0 LIMIT 100',[]],
+    ['alert dedup','SELECT id FROM stamplc_alerts WHERE type=? AND created_ms>? LIMIT 1',['ph_abnormal',0]],
+    ['recent alerts','SELECT type,severity,message,created_ms FROM stamplc_alerts ORDER BY created_ms DESC LIMIT ?',[10]],
+    ['sample pruning','DELETE FROM stamplc_samples WHERE flushed=1 AND received_ms<? AND received_ms<?',[clock-86400000,clock]],
+  ];
+  for(const [name,sql,args] of indexedPlans){const plan=idle.storageDB.prepare('EXPLAIN QUERY PLAN '+sql).all(...args).map(row=>row.detail).join('; ');check(/USING.*INDEX/.test(plan)&&!plan.includes('TEMP B-TREE'),'resource query uses index without full-table sort: '+name);}
+  const quiet=resourceFixture(true),resourceSession='1234567890abcdef';
+  await quiet.send({type:'relay_hello',session_id:resourceSession,channels:4,relays:[false,false,false,false],relay_valid:true,utc_ms:clock});
+  const writesBeforeReports=quiet.writes,readsBeforeReports=quiet.queries.length,alarmsBeforeReports=quiet.alarms.length;
+  for(let i=0;i<100;i++){clock+=5000;await quiet.send({type:'ping',seq:i});await quiet.send({type:'relay_state',session_id:resourceSession,relays:[false,false,false,false],relay_valid:true,utc_ms:clock});await quiet.state();}
+  check(quiet.writes===writesBeforeReports&&quiet.queries.length===readsBeforeReports,'100 heartbeat/readback/snapshot cycles do not repeatedly read or write SQL');
+  check(quiet.alarms.length===alarmsBeforeReports,'unchanged reports do not write a fresh alarm for each message');
+  quiet.wake();const restored=await quiet.state();check(restored.relay_valid&&restored.relay_session===resourceSession&&restored.relay_reported_ms===clock,'current GPIO freshness and session survive hibernation via WebSocket attachment');
+
+  const timed=resourceFixture(true);await timed.send({type:'relay_hello',session_id:resourceSession,channels:4,relays:[false,false,false,false],relay_valid:true,utc_ms:clock});
+  clock+=5000;await timed.send({type:'ping',seq:1});await timed.fire();check(timed.armed===clock+60000,'connected quiet hub schedules minute flush rather than five-second polling');
+  await timed.send({type:'relay_state',session_id:resourceSession,relays:[false,false,false,false],relay_valid:true,utc_ms:clock});
+  const deadlineCommand=body(1,true),deadlineRequest=new Request('https://device-hub/relay-cmd',{method:'POST',headers:{'Content-Type':'application/json','X-Greeny-User-Id':'1'},body:JSON.stringify(deadlineCommand)});
+  const deadlineResponse=await timed.hub.fetch(deadlineRequest),deadlineWire=timed.socket.sent.find(row=>row.type==='command');
+  check(deadlineResponse.status===202&&timed.armed===deadlineWire.expires_ms&&timed.armed===clock+15000,'pending command deadline preempts the minute flush without extending its TTL');
+  clock=deadlineWire.expires_ms;await timed.fire();check(timed.storageDB.prepare('SELECT status FROM stamplc_commands WHERE command_id=?').get(deadlineCommand.command_id).status==='expired','command expires at its exact deadline after scheduler optimization');
+  timed.socket.close();await timed.hub.webSocketClose(timed.socket);clock=timed.armed;await timed.fire();check(timed.armed===null&&timed.audit.prepare("SELECT status FROM devices WHERE id='esp32-sensor'").get().status==='offline','disconnect flushes final offline state and then stops scheduling');
+
+  const backlog=resourceFixture();for(let i=0;i<150;i++)queuedSample(backlog,'backlog-'+i,clock-1000+i);backlog.wake();clock+=5000;await backlog.fire();
+  check(backlog.audit.prepare('SELECT COUNT(*) n FROM telemetry').get().n===100&&backlog.armed===clock+60000,'offline backlog larger than one batch remains scheduled');
+  clock=backlog.armed;await backlog.fire();check(backlog.audit.prepare('SELECT COUNT(*) n FROM telemetry').get().n===150&&backlog.armed===null,'all remaining backlog is flushed exactly once before the offline alarm stops');
+  const offlineReads=backlog.queries.length;for(let i=0;i<20;i++)await backlog.state();check(backlog.queries.length===offlineReads,'repeated offline state reads reuse the pending cache');
+
+  const retrying=resourceFixture();queuedSample(retrying,'retry-sample');retrying.wake();retrying.database.hook=async sql=>{if(sql.startsWith('INSERT INTO telemetry'))throw new Error('Simulated D1 outage');};clock+=5000;
+  const savedConsoleError=console.error;try{console.error=()=>{};await retrying.fire();}finally{console.error=savedConsoleError;}
+  const retryAt=retrying.armed;check(retryAt===clock+60000&&retrying.storageDB.prepare('SELECT flushed FROM stamplc_samples').get().flushed===0,'failed D1 flush retains data and schedules a one-minute retry');
+  retrying.wake();await retrying.fire();check(retrying.armed===retryAt,'flush retry backoff survives hibernation');
+  retrying.database.hook=null;clock=retryAt;await retrying.fire();check(retrying.armed===null&&retrying.audit.prepare('SELECT COUNT(*) n FROM telemetry').get().n===1,'retry completes without duplicate ingestion and offline scheduling stops');
+
+  const retained=resourceFixture();for(let i=0;i<3;i++)queuedSample(retained,'old-'+i,clock-2*86400000+i);retained.wake();clock+=5000;await retained.fire();retained.wake();const retainedState=await retained.state();
+  check(retained.storageDB.prepare('SELECT COUNT(*) n FROM stamplc_samples').get().n===1&&retainedState.ec===108&&retainedState.sample_stale&&retained.audit.prepare('SELECT COUNT(*) n FROM telemetry').get().n===3,'pruning keeps the newest offline sample and preserves the full flushed D1 history');
+  const migrated=resourceFixture();queuedSample(migrated,'migration-preserved');migrated.storageDB.exec("DELETE FROM stamplc_meta WHERE key='query_indexes_v2'");for(const row of migrated.storageDB.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'stamplc_%'").all())migrated.storageDB.exec('DROP INDEX '+row.name);migrated.wake();
+  check(migrated.storageDB.prepare('SELECT COUNT(*) n FROM stamplc_samples').get().n===1&&migrated.storageDB.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type='index' AND name LIKE 'stamplc_%'").get().n===8,'additive index upgrade preserves existing sensor records');
 
   check(main.prepare('PRAGMA foreign_key_check').all().length===0,'fresh schema retains foreign-key integrity after ingestion and relay audit');
   await Promise.all(promises);console.log(JSON.stringify({passed:results.length,failed:0,tests:results,typescript:ts.version,physicalOutputsTouched:false,cloudMutations:false,filesystemWrites:false}));
